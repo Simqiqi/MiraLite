@@ -16,6 +16,7 @@ const MAX_FILES: usize = 4000;
 const MAX_DEPTH: usize = 5;
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ScannedFile {
   pub path: String,
   pub file_name: String,
@@ -397,4 +398,130 @@ mod scan_tests {
     }
     std::fs::remove_dir_all(&root).ok();
   }
+}
+
+// ---------------------------------------------------------------- 字幕
+
+const SUB_EXTS: &[&str] = &["srt", "ass", "ssa", "vtt"];
+const MAX_SUBTITLE_BYTES: u64 = 4 * 1024 * 1024;
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleFile {
+  pub path: String,
+  pub name: String,
+}
+
+fn is_subtitle(p: &Path) -> bool {
+  match p.extension() {
+    Some(ext) => SUB_EXTS.contains(&ext.to_string_lossy().to_lowercase().as_str()),
+    None => false,
+  }
+}
+
+/// 在视频同级目录（以及常见的 Subs 子目录）里找同名或同前缀的字幕
+#[tauri::command]
+pub fn find_subtitles(video_path: String) -> Result<Vec<SubtitleFile>, String> {
+  let video = PathBuf::from(&video_path);
+  let dir = video
+    .parent()
+    .ok_or_else(|| "视频路径不合法".to_string())?
+    .to_path_buf();
+  let stem = video
+    .file_stem()
+    .map(|x| x.to_string_lossy().to_lowercase())
+    .unwrap_or_default();
+  if stem.is_empty() {
+    return Ok(Vec::new());
+  }
+
+  let mut out: Vec<SubtitleFile> = Vec::new();
+  let mut seen: Vec<String> = Vec::new();
+
+  fn walk(dir: &Path, stem: &str, out: &mut Vec<SubtitleFile>, seen: &mut Vec<String>) {
+    let rd = match std::fs::read_dir(dir) {
+      Ok(r) => r,
+      Err(_) => return,
+    };
+    for entry in rd.flatten() {
+      let p = entry.path();
+      if p.is_dir() {
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        // 常见字幕子目录只往下走一层，避免把整棵树扫一遍
+        if matches!(name.as_str(), "subs" | "sub" | "subtitles" | "subtitle") && dir.parent().is_some()
+        {
+          walk(&p, stem, out, seen);
+        }
+        continue;
+      }
+      if !is_subtitle(&p) {
+        continue;
+      }
+      let fstem = p
+        .file_stem()
+        .map(|x| x.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+      // 同名（movie.srt）、同前缀（movie.chs.srt / movie.zh-CN.srt）都收
+      if fstem == stem || fstem.starts_with(&format!("{stem}.")) || fstem.starts_with(&format!("{stem}_")) {
+        let path = p.to_string_lossy().to_string();
+        if seen.contains(&path) {
+          continue;
+        }
+        seen.push(path.clone());
+        out.push(SubtitleFile {
+          name: p
+            .file_name()
+            .map(|x| x.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone()),
+          path,
+        });
+      }
+    }
+  }
+
+  walk(&dir, &stem, &mut out, &mut seen);
+  if out.is_empty() {
+    return Ok(out);
+  }
+  // 完全同名的排前面（movie.srt 通常就是主字幕）
+  out.sort_by_key(|s| {
+    let f = Path::new(&s.name)
+      .file_stem()
+      .map(|x| x.to_string_lossy().to_lowercase())
+      .unwrap_or_default();
+    (f != stem).to_string()
+  });
+  out.truncate(12);
+  Ok(out)
+}
+
+fn b64_encode(bytes: &[u8]) -> String {
+  const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+  for chunk in bytes.chunks(3) {
+    let b0 = chunk[0] as u32;
+    let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+    let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+    let n = (b0 << 16) | (b1 << 8) | b2;
+    out.push(T[(n >> 18) as usize & 63] as char);
+    out.push(T[(n >> 12) as usize & 63] as char);
+    out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+    out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+  }
+  out
+}
+
+/// 读字幕原文（base64 返回，前端自己判断 UTF-8 / GBK）。只允许读字幕扩展名。
+#[tauri::command]
+pub fn read_subtitle_b64(path: String) -> Result<String, String> {
+  let p = PathBuf::from(&path);
+  if !is_subtitle(&p) {
+    return Err("只允许读取字幕文件（srt / ass / ssa / vtt）".to_string());
+  }
+  let meta = std::fs::metadata(&p).map_err(|e| format!("读取字幕失败：{e}"))?;
+  if meta.len() > MAX_SUBTITLE_BYTES {
+    return Err("字幕文件超过 4MB，已跳过".to_string());
+  }
+  let bytes = std::fs::read(&p).map_err(|e| format!("读取字幕失败：{e}"))?;
+  Ok(b64_encode(&bytes))
 }

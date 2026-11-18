@@ -138,6 +138,7 @@ export function toMediaItems(results: ScrapeResult[], sourceId: string): MediaIt
       overview: tmdb?.overview || `${group.files.length} 个文件 · 来自本地目录`,
       hue,
       streamUrl: first ? convertFileSrc(first.path) : undefined,
+      filePath: first?.path,
       sourceId,
       group: '本地媒体库',
       poster: tmdb?.poster || undefined,

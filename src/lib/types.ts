@@ -20,6 +20,16 @@ export interface MediaItem {
   /** 剧集专属 */
   seasons?: number
   episodes?: number
+  /** 直播专属：Xtream 的 stream_id，EPG 与播放地址都靠它 */
+  streamId?: number
+  /** Xtream 的 epg_channel_id，部分面板的节目单以它为准 */
+  epgChannelId?: string
+  /** 是否支持回看 */
+  tvArchive?: boolean
+  /** Xtream 分类 id，便于按分类刷新 */
+  categoryId?: string
+  /** 本地媒体库：原始文件路径（找同名字幕用） */
+  filePath?: string
 }
 
 export type SourceKind = 'm3u' | 'xtream' | 'local'

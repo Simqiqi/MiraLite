@@ -1,13 +1,16 @@
 mod cat;
 mod local;
+mod probe;
 mod stream_proxy;
 mod sys;
 mod tmdb;
+mod xtream;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .manage(cat::CatState::default())
+    .manage(xtream::XtreamState::default())
     .setup(|app| {
       app.handle().plugin(
         tauri_plugin_log::Builder::default()
@@ -35,6 +38,20 @@ pub fn run() {
       local::scan_media_dir,
       local::pick_media_folder,
       local::tmdb_search,
+      local::find_subtitles,
+      local::read_subtitle_b64,
+      probe::probe_url,
+      probe::export_backup,
+      probe::pick_backup_file,
+      probe::read_backup_file,
+      xtream::xtream_login,
+      xtream::xtream_categories,
+      xtream::xtream_live_streams,
+      xtream::xtream_vod_streams,
+      xtream::xtream_series,
+      xtream::xtream_series_info,
+      xtream::xtream_epg,
+      xtream::http_get_text,
       sys::open_url,
       sys::has_app,
     ])

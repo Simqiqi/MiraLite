@@ -6,6 +6,10 @@ const KEY = 'miralite.state.v1'
 interface StoreState extends LibraryState {
   /** 由用户导入的源解析出的频道/媒体条目 */
   channels: MediaItem[]
+  /** 收藏的直播频道 id（按收藏时间倒序） */
+  channelFavorites: string[]
+  /** 最近看过的直播频道 id（最多 12 个） */
+  channelRecent: string[]
 }
 
 const initialState: StoreState = {
@@ -14,6 +18,8 @@ const initialState: StoreState = {
   progress: {},
   prefs: { tastePrint: true, autoplayNext: true, preferQuality: 'auto' },
   channels: [],
+  channelFavorites: [],
+  channelRecent: [],
 }
 
 let state: StoreState = load()
@@ -29,6 +35,8 @@ function load(): StoreState {
       ...parsed,
       prefs: { ...initialState.prefs, ...parsed.prefs },
       channels: parsed.channels ?? [],
+      channelFavorites: parsed.channelFavorites ?? [],
+      channelRecent: parsed.channelRecent ?? [],
     }
   } catch {
     return initialState
@@ -88,6 +96,27 @@ export const actions = {
       sources: s.sources.filter((x) => x.id !== id),
       channels: s.channels.filter((c) => c.sourceId !== id),
     }))
+  },
+
+  toggleChannelFavorite(id: string) {
+    set((s) => ({
+      ...s,
+      channelFavorites: s.channelFavorites.includes(id)
+        ? s.channelFavorites.filter((x) => x !== id)
+        : [id, ...s.channelFavorites],
+    }))
+  },
+
+  /** 记一次直播观看：去重后放到最前面，最多留 12 个 */
+  markChannelPlayed(id: string) {
+    set((s) => ({
+      ...s,
+      channelRecent: [id, ...s.channelRecent.filter((x) => x !== id)].slice(0, 12),
+    }))
+  },
+
+  clearChannelRecent() {
+    set((s) => ({ ...s, channelRecent: [] }))
   },
 
   /** 用某个源最新解析出来的条目替换该源原有条目 */

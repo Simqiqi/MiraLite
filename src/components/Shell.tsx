@@ -1,18 +1,51 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Clapperboard, Home, Search, Settings2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Clapperboard, Home, Library, Search, Settings2, Tv, UserRound } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import CommandPalette from './CommandPalette'
 
 const navItems = [
   { to: '/', label: '首页', icon: Home },
   { to: '/chase', label: '追剧', icon: Clapperboard },
+  { to: '/live', label: '直播', icon: Tv },
+  { to: '/library', label: '片库', icon: Library },
+  { to: '/me', label: '我的', icon: UserRound },
 ]
 
 export default function Shell() {
   const navigate = useNavigate()
   const location = useLocation()
+  const section = useMemo(() => {
+    const p = location.pathname
+    if (p === '/') return '首页'
+    if (p.startsWith('/chase')) return '追剧'
+    if (p.startsWith('/live')) return '直播'
+    if (p.startsWith('/library')) return '片库'
+    if (p.startsWith('/me')) return '我的'
+    if (p.startsWith('/glass')) return '液态玻璃'
+    if (p.startsWith('/settings')) return '设置'
+    if (p.startsWith('/play')) return '播放'
+    if (p.startsWith('/cat/search') || p.startsWith('/search')) return '搜索'
+    if (p.startsWith('/cat/item') || p.startsWith('/item')) return '影视详情'
+    if (p.startsWith('/cat')) return '影视'
+    return 'MiraLite'
+  }, [location.pathname])
+
   const [query, setQuery] = useState('')
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [barHidden, setBarHidden] = useState(false)
   const lastScroll = useRef(0)
+
+  // ⌘K / Ctrl+K 随时唤出全局搜索
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // 换页时顶栏复位、滚动基准归零
   useEffect(() => {
@@ -98,23 +131,41 @@ export default function Shell() {
               : 'max-h-[60px] translate-y-0 opacity-100'
           }`}
         >
-          <header className="glass-capsule flex h-[52px] items-center justify-between rounded-[26px] px-6">
-            <div data-tauri-drag-region className="text-[12px] font-medium tracking-wide text-muted">
-              MiraLite
-              <span className="mx-2 text-white/20">/</span>
-              <span className="text-fg/70">IPTV &amp; Library</span>
+          <header className="glass-capsule flex h-[52px] items-center justify-between gap-4 rounded-[26px] px-5">
+            {/* 左：字标 + 当前分区 */}
+            <div data-tauri-drag-region className="flex min-w-0 items-center gap-3">
+              <span className="font-serif text-[14px] font-semibold tracking-[0.02em] text-fg/90">
+                MiraLite
+              </span>
+              <span className="h-3.5 w-px shrink-0 bg-white/12" aria-hidden="true" />
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="h-1 w-1 shrink-0 rounded-full bg-gold/80" aria-hidden="true" />
+                <span className="truncate text-[10.5px] uppercase tracking-[0.18em] text-muted/80">
+                  {section}
+                </span>
+              </span>
             </div>
-            <form onSubmit={submitSearch} className="relative">
+
+            {/* 右：搜索胶囊 */}
+            <form onSubmit={submitSearch} className="group relative shrink-0">
               <Search
                 size={13}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted transition group-focus-within:text-gold"
               />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="搜索片名 / 频道"
-                className="glass-input h-8 w-[220px] rounded-lg pl-8 pr-3 text-[12px] text-fg"
+                placeholder="搜索片名、频道…"
+                className="glass-input h-8 w-[252px] rounded-full pl-8 pr-14 text-[12px] text-fg transition"
               />
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                title="全局搜索（⌘K）"
+                className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-white/6 px-2 py-0.5 text-[9px] tracking-wider text-muted/70 transition hover:bg-gold/15 hover:text-gold"
+              >
+                ⌘K
+              </button>
             </form>
           </header>
         </div>
@@ -126,6 +177,8 @@ export default function Shell() {
           <Outlet />
         </main>
       </div>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   )
 }

@@ -1,10 +1,12 @@
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { actions, useLibrary } from '../lib/store'
 import LocalLibrary from '../components/LocalLibrary'
 import SourcesSection from '../components/SourcesSection'
 import SiteSwitches from '../components/SiteSwitches'
-import TmdbSection from '../components/TmdbSection'
 import { clearAllLineFails, failedLineCount } from '../lib/lines'
 import { clearPlayback, usePlayback } from '../lib/playback'
+import { applyBackup, exportSettings, pickBackup } from '../lib/backup'
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -46,7 +48,40 @@ function Row({ title, desc, right }: { title: string; desc: string; right: React
 
 export default function SettingsPage() {
   const { prefs, progress, watchlist } = useLibrary()
+  const navigate = useNavigate()
   const playback = usePlayback()
+  const [backupMsg, setBackupMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const [busy, setBusy] = useState<'export' | 'import' | null>(null)
+
+  async function doExport() {
+    setBusy('export')
+    setBackupMsg(null)
+    try {
+      const r = await exportSettings()
+      setBackupMsg({ kind: 'ok', text: `已导出 ${r.keys} 项配置到 ${r.path}` })
+    } catch (e) {
+      setBackupMsg({ kind: 'err', text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function doRestore() {
+    setBackupMsg(null)
+    try {
+      const payload = await pickBackup()
+      if (!payload) return
+      if (!window.confirm('恢复会用备份覆盖当前配置，确定继续吗？')) return
+      setBusy('import')
+      const n = applyBackup(payload)
+      setBackupMsg({ kind: 'ok', text: `已恢复 ${n} 项配置，正在刷新…` })
+      window.setTimeout(() => window.location.reload(), 600)
+    } catch (e) {
+      setBackupMsg({ kind: 'err', text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(null)
+    }
+  }
 
   return (
     <div className="px-10 pb-16 pt-7">
@@ -88,8 +123,19 @@ export default function SettingsPage() {
         />
       </Section>
 
-      <Section title="影视数据源（TMDB）">
-        <TmdbSection />
+      <Section title="外观">
+        <Row
+          title="液态玻璃展示"
+          desc="面板、按钮、输入框、导航与可调光晕实验室"
+          right={
+            <button
+              onClick={() => navigate('/glass')}
+              className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-fg/80 transition hover:text-gold"
+            >
+              打开
+            </button>
+          }
+        />
       </Section>
 
       <Section title="片源">
@@ -105,6 +151,41 @@ export default function SettingsPage() {
       </Section>
 
       <Section title="数据">
+        <Row
+          title="备份配置"
+          desc="把源、收藏、追剧、观看进度、CAT 订阅与脚本导出成 JSON（不含缓存）"
+          right={
+            <button
+              onClick={() => void doExport()}
+              disabled={busy !== null}
+              className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-fg/80 transition hover:text-gold disabled:opacity-50"
+            >
+              {busy === 'export' ? '导出中…' : '导出'}
+            </button>
+          }
+        />
+        <Row
+          title="恢复备份"
+          desc="从 .json 覆盖恢复当前配置，恢复后会自动刷新界面"
+          right={
+            <button
+              onClick={() => void doRestore()}
+              disabled={busy !== null}
+              className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-muted transition hover:text-gold disabled:opacity-50"
+            >
+              {busy === 'import' ? '恢复中…' : '恢复'}
+            </button>
+          }
+        />
+        {backupMsg && (
+          <div
+            className={`px-5 py-2.5 text-[10.5px] leading-relaxed ${
+              backupMsg.kind === 'ok' ? 'text-emerald-300/90' : 'text-amber-300/90'
+            }`}
+          >
+            {backupMsg.text}
+          </div>
+        )}
         <Row title="片单" desc={`${watchlist.length} 部已收藏`} right={<span className="text-[12px] text-muted">—</span>} />
         <Row
           title="继续观看"

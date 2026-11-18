@@ -13,6 +13,7 @@
 
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
     "Helvetica Neue", sans-serif;
+  --font-serif: "New York", "Songti SC", "Times New Roman", Georgia, serif;
 }
 
 /* 每次打开由 main.tsx 注入一组新色相，驱动下面所有环境光 */
@@ -439,6 +440,93 @@ body {
   animation: fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* 横向海报行两端渐隐，避免卡片硬切在边缘 */
+.row-mask {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 22px,
+    #000 calc(100% - 22px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 22px,
+    #000 calc(100% - 22px),
+    transparent 100%
+  );
+}
+
+/* 首屏骨架：海报形状占位 + 扫光 */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.075) 50%,
+    transparent 100%
+  );
+  animation: skeleton-sweep 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* 液态玻璃展示页：局部预览用的流动光斑 */
+.glass-blob {
+  position: absolute;
+  border-radius: 9999px;
+  mix-blend-mode: screen;
+  opacity: 0.8;
+  pointer-events: none;
+  will-change: transform;
+  animation-name: blob-float;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+@keyframes blob-float {
+  0% {
+    transform: translate3d(-6%, -4%, 0) scale(0.94);
+  }
+  50% {
+    transform: translate3d(8%, 6%, 0) scale(1.12);
+  }
+  100% {
+    transform: translate3d(-3%, 10%, 0) scale(1);
+  }
+}
+
+/* 首页大横幅：换片时轻微推近，配合 10 秒轮换 */
+@keyframes hero-zoom {
+  from {
+    transform: scale(1.02);
+  }
+  to {
+    transform: scale(1.1);
+  }
+}
+
+.hero-zoom {
+  animation: hero-zoom 14s ease-out both;
+}
+
+
 .grain::before {
   content: "";
   position: fixed;
@@ -451,7 +539,12 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .liquid-bg,
-  .liquid-veil {
+  .liquid-veil,
+  .hero-zoom,
+  .glass-blob {
+    animation: none;
+  }
+  .skeleton::after {
     animation: none;
   }
 }

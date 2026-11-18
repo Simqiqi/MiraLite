@@ -14,7 +14,9 @@ import {
   X,
 } from 'lucide-react'
 import { actions, useLibrary } from '../lib/store'
-import { diagnoseNonPlaylist, parsePlaylist, xtreamBase } from '../lib/m3u'
+import { diagnoseNonPlaylist, parsePlaylist } from '../lib/m3u'
+import { fetchText } from '../lib/net'
+import { fetchXtreamChannels, xtreamLogin } from '../lib/xtream'
 import {
   catActiveUrl,
   catConfig,
@@ -254,20 +256,28 @@ export default function SourcesSection() {
     })
 
     try {
-      const target =
-        tab === 'xtream'
-          ? `${xtreamBase(url)}/get.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&type=m3u_plus`
-          : url.trim()
-      const res = await fetch(target)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const text = await res.text()
-      const bad = diagnoseNonPlaylist(text)
-      if (bad) throw new Error(bad)
-      const items = parsePlaylist(text, source.id)
-      if (items.length === 0)
-        throw new Error('没有解析到任何频道：内容既不是 M3U（#EXTINF）也不像 TXT 直播源（频道名,地址）')
-      actions.setSourceChannels(source.id, items)
-      setNotice({ kind: 'ok', text: `已导入 ${items.length} 个条目` })
+      if (tab === 'xtream') {
+        // Xtream 走 player_api：拿到的频道自带 stream_id / epg_channel_id，
+        // 后续节目单与 HLS 地址都基于它，比解析 get.php 的 m3u 更稳。
+        const account = await xtreamLogin(url.trim(), username.trim(), password)
+        if (!account.ok) throw new Error(account.message || '账号校验失败')
+        const items = await fetchXtreamChannels(source)
+        if (items.length === 0) throw new Error('面板没有返回直播频道，确认账号是否有直播权限')
+        actions.setSourceChannels(source.id, items)
+        setNotice({
+          kind: 'ok',
+          text: `已导入 ${items.length} 个直播频道${account.formats.length ? ` · 支持 ${account.formats.join(' / ')}` : ''}`,
+        })
+      } else {
+        const text = await fetchText(url.trim())
+        const bad = diagnoseNonPlaylist(text)
+        if (bad) throw new Error(bad)
+        const items = parsePlaylist(text, source.id)
+        if (items.length === 0)
+          throw new Error('没有解析到任何频道：内容既不是 M3U（#EXTINF）也不像 TXT 直播源（频道名,地址）')
+        actions.setSourceChannels(source.id, items)
+        setNotice({ kind: 'ok', text: `已导入 ${items.length} 个条目` })
+      }
       setName('')
       setUrl('')
       setUsername('')
@@ -288,18 +298,19 @@ export default function SourcesSection() {
     setBusy(true)
     setNotice(null)
     try {
-      const target =
-        src.kind === 'xtream'
-          ? `${xtreamBase(src.url)}/get.php?username=${encodeURIComponent(src.username ?? '')}&password=${encodeURIComponent(src.password ?? '')}&type=m3u_plus`
-          : src.url
-      const res = await fetch(target)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const text = await res.text()
-      const bad = diagnoseNonPlaylist(text)
-      if (bad) throw new Error(bad)
-      const items = parsePlaylist(text, src.id)
-      actions.setSourceChannels(src.id, items)
-      setNotice({ kind: 'ok', text: `${src.name}：已刷新 ${items.length} 个条目` })
+      if (src.kind === 'xtream') {
+        const items = await fetchXtreamChannels(src)
+        if (items.length === 0) throw new Error('面板没有返回直播频道')
+        actions.setSourceChannels(src.id, items)
+        setNotice({ kind: 'ok', text: `${src.name}：已刷新 ${items.length} 个直播频道` })
+      } else {
+        const text = await fetchText(src.url)
+        const bad = diagnoseNonPlaylist(text)
+        if (bad) throw new Error(bad)
+        const items = parsePlaylist(text, src.id)
+        actions.setSourceChannels(src.id, items)
+        setNotice({ kind: 'ok', text: `${src.name}：已刷新 ${items.length} 个条目` })
+      }
     } catch (err) {
       setNotice({ kind: 'err', text: `刷新失败：${err instanceof Error ? err.message : String(err)}` })
     } finally {

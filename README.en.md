@@ -63,8 +63,23 @@ The CAT/TVBox spider engine is built in, so you can browse, search and play titl
 
 ## What's in this release
 
+- **Library (Xtream VOD / series)**: a new sidebar entry with category filters and title search. Movies play on click; series slide out a season/episode panel and start from any episode. Listings cache for 20 minutes per session, multiple Xtream sources switch from the corner, and playback URLs are assembled in the player from the source credentials instead of being persisted.
+- **Hero and row details**: four small "up next" posters stack on the right of the hero and switch on click; the top-rated rows stamp their first ten posters with oversized outlined rank numbers for an editorial Top 10 feel.
+- **More atmosphere on Home**: the hero now parallaxes gently against scroll, samples a dominant colour from each backdrop to retint the app's ambient glow, and a very faint cursor spotlight sweeps the glass edges as the pointer moves.
+- **Home polish**: posters lift and reveal their overview plus a "find a route" hint on hover; ranking rows page left/right with masked edges; continue-watching became 16:9 cards with "N min left"; the first paint uses poster-shaped skeletons; section headers gained a hairline divider and letter-spacing, and the hero title switched to a serif face.
+- **Liquid-glass showcase (`/glass`)**: the whole material system laid out — three glass densities, buttons and chips, inputs, a capsule nav, refracting poster cards, plus a "glow lab" where hue, blur and flow speed sliders drive live coloured blobs behind a glass panel. A button in the corner rerolls the app-wide ambient palette. Reach it from Settings → Appearance or by searching "liquid glass" in ⌘K.
+- **A "Me" page**: a new sidebar entry collecting favourites (watchlist plus favourited channels) and history (continue watching plus recent channels) behind two tabs, with inline unfavourite, remove and clear actions.
+- **⌘K global search**: press ⌘K anywhere to open a palette that searches live channels, the local library, recents and recent queries in one box — pick a result to play or open it, or hit Enter to hand the term to CAT for cross-site search.
+- **Channel health check**: the live page can probe channels one by one (6s timeout, done in Rust). Dead ones are dimmed and sorted last, can be hidden with one click, and zapping skips anything found dead in the last six hours.
+- **Config backup / restore**: Settings → Data exports sources, favourites, watchlist, progress, CAT subscriptions and userscripts to a JSON file in Downloads (caches excluded); restore from that file after a reinstall and the UI reloads automatically.
+- **Sleep timer**: pick 15/30/60/90 minutes in the player, see the countdown in the control bar, and playback pauses with a toast when it hits zero.
+- **Live, improved**: favourite channels (pinned to the front and filterable), the last eight channels you watched, and ↑/↓ zapping in the player. A new timeline view lays the day's programmes out per channel with a gold "now" line — click any programme to start it.
+- **Player upgrades**: local videos automatically pick up sibling subtitles (`movie.srt`, `movie.chs.srt`; srt / ass / ssa / vtt, UTF-8 or GBK auto-detected, ASS keeps dialogue only), switchable or one-tap off; picture-in-picture for on-demand; live streams reconnect with backoff (up to six attempts) and show status instead of going black.
+- **Live page + EPG**: an Xtream account now turns into a channel wall grouped by category. Each card shows what is on now, a progress bar and the next programme; the "guide" button opens the full day's schedule and can start playback from there. Schedules are cached per channel for 15 minutes, and base64-encoded titles/descriptions from panels are decoded on the Rust side.
+- **Xtream now uses the real player_api**: instead of only building a `get.php?type=m3u_plus` playlist, MiraLite reads account info, live categories and streams via `player_api.php` (keeping `stream_id` / `epg_channel_id` / archive days) and plays through `live/{user}/{pass}/{id}.m3u8`. VOD, series and EPG endpoints are wired up as well, ready for the upcoming on-demand pages.
+- **Fetching moved to Rust**: playlists, Xtream endpoints and EPG all go through Rust, so the webview is no longer blocked by panel CORS, with a 20s timeout and a 12MB response cap to keep memory in check.
 - **Liquid glass**: a fresh hue set on every launch, with a coloured haze drifting underneath. Sidebar, top bar, settings panel, inputs, cards and buttons all share translucent glass (backdrop blur, specular edge, coloured refraction), while the video area stays pure black so it never competes with the picture.
-- **3D coverflow home**: TMDB aggregation with a rAF-driven carousel rotating at constant speed — hover pauses it, clicking a card, arrow or dot smoothly targets it, nine cards fill both sides, and the rating chip sits on the cover corner with no info card above.
+- **Cinematic hero home**: a full-bleed backdrop with title, year, rating and overview, a primary "find a playable route" action, twelve-second auto-rotation, plus a capsule counter and pager in the corner. Ranking rows are tightened up with counts in the heading and helper text moved to the right.
 - **Watchlist**: playing a CAT series records it locally — which episode, which site, when it updated. "Continue" jumps back to the detail page to pick the next episode; star, remove or clear from the list, and add titles from the home page in one tap.
 - **Unified search**: one box searches local content and channels together with CAT cross-site titles, results shown in sections. The CAT part fans out across sites concurrently and ranks by relevance, with a link to the full CAT search page.
 - **Multiple subscriptions, instant switching**: several CAT sources are stored in `miralite.cat.subscriptions.v1` (an old single address migrates automatically). Rename or delete each entry, and "select / in use" switches the active source immediately — home rankings, search and playback all follow it. The "test" button spins up a separate temporary engine to measure site count and search hits without touching the source you are using.
@@ -72,19 +87,22 @@ The CAT/TVBox spider engine is built in, so you can browse, search and play titl
 
 ## Features
 
-- Minimal left nav (Home / Watchlist / Settings, shifted down to clear the macOS traffic lights) plus top search for CAT aggregation, IPTV and local library
-- Home: TMDB poster rows for In Theatres / Popular Movies / Popular TV / Top Rated Movies / Top Rated TV; tapping a poster cross-site searches a playable route by title
+- Minimal left nav (Home / Watchlist / Live / Library / Me / Settings; shifted down to clear the macOS traffic lights) plus top search and the ⌘K global palette
+- Library: Xtream VOD movies / series with category filters, search, a season-episode drawer and source switching
+- Me: favourites (watchlist + favourited channels) and history (continue watching + recent channels)
+- Live page: category filter, channel search, favourites and recents, health check (dim/hide dead channels, zapping skips them), EPG now/next, full-day guide drawer, timeline view, archive badge
+- Home: cinematic hero (backdrop + overview + find-a-route, rotating every twelve seconds, parallax, backdrop-driven ambient tint and a thumbnail strip), continue watching as 16:9 cards, then TMDB poster rows for In Theatres / Popular Movies / Popular TV / Top Rated Movies / Top Rated TV; posters reveal their overview on hover, rows page left/right, top-rated rows carry outlined Top 10 numbers, and the first paint is skeleton-based
 - CAT page (route kept for home links): site list, category browsing, concurrent cross-site search, cloud-drive login guide, no-login-only site filter
 - CAT detail: multiple routes plus episode list, automatic route fallback, auth-header passthrough playback
 - Movies / TV pages (routes kept, not in the menu): genre filter, sorting, progress bar
-- Player: hls.js adaptive streaming, custom control bar, progress write-back, keyboard shortcuts (Space / ←→ / M / Esc)
+- Player: hls.js adaptive streaming with auto-reconnect, custom control bar, progress write-back, keyboard shortcuts (Space / ←→ / M / Esc, ↑↓ zapping on live), local subtitle switching (srt / ass / vtt, GBK aware), picture-in-picture, sleep timer
 - Settings:
   - Playback: auto-play next, preferred quality
   - Recommendations: TastePrint toggle
   - Sources:
     - CAT subscriptions: multiple sources saved locally, rename and delete, instant switching between them, "test" using an isolated temporary engine, and the active subscription warms up on launch
-    - Cloud-drive setup, M3U / Xtream / local folder onboarding, connected source management
-  - Data: clear watchlist and watch history
+    - Cloud-drive setup, M3U / Xtream / local folder onboarding (Xtream is validated before import and brings categories plus EPG), connected source management
+  - Data: config backup / restore (JSON), clear watchlist and watch history
 - Built and packaged as `.app` / `.dmg`
 
 ## Build & Run
@@ -128,13 +146,14 @@ Frontend assets are embedded into the binary by Tauri, so **any change to the fr
 src/
   components/   Shell nav, SourcesSection, TmdbSection, PlayerOverlay, Poster/Row
   data/         demo data (movies / series / channels) + tmdbSnapshot (real TMDB ranking snapshot, offline fallback)
-  lib/          types / store / catalog / m3u / cat (CAT IPC wrapper) / catSession (multi-source · trending · cross-site search) / tmdb / chase
-  pages/        Home / Chase / Movies / TV / Cat / CatSearch / CatDetail / Player / Detail / Search / Settings
+  lib/          types / store / catalog / m3u / net (text fetching) / xtream (Xtream API) / epg (programme guide) / cat (CAT IPC wrapper) / catSession (multi-source · trending · cross-site search) / tmdb / chase
+  pages/        Home / Chase / Live / Movies / TV / Cat / CatSearch / CatDetail / Player / Detail / Search / Settings
 src-tauri/
   src/lib.rs           Tauri command registration and startup
   src/cat.rs           CAT engine startup, per-subscription-address hashed cache, cat_proxy, cat_probe (:9988, kept off the stream proxy's :9989)
   src/tmdb.rs          TMDB ranking proxy (api.tmdb.org), local key config, connection test
   src/stream_proxy.rs  Local stream proxy (:9989), HLS rewriting + auth header passthrough + Range
+  src/xtream.rs        Xtream player_api (account / categories / live / VOD / series / EPG) + text fetch proxy
 ```
 
 ### TMDB rankings cache and network
@@ -146,7 +165,7 @@ TMDB rankings only refresh a few times a day, so there is no point firing five r
 - Concurrent callers share one in-flight request, and a failed request keeps the old cache.
 - Changing the key, or hitting the refresh button in the top-right corner, triggers a refetch.
 
-The official `api.themoviedb.org` is DNS-poisoned and unreachable from mainland China, so the app uses the official alternate domain `api.tmdb.org` (AWS CloudFront, verified reachable). Enter a v3 api_key or v4 Bearer Token under Settings → TMDB metadata source to go live; the key is stored only on this machine at `~/Library/Application Support/com.miralite.app/tmdb.json` (mode 600) and never lands in the source tree or the binary. With no key, a failed request, or a browser preview, the app falls back to the bundled real TMDB snapshot.
+The official `api.themoviedb.org` is DNS-poisoned and unreachable from mainland China, so the app uses the official alternate domain `api.tmdb.org` (AWS CloudFront, verified reachable). A v3 api_key or v4 Bearer Token is supported (the TMDB config entry is hidden from Settings; the capability stays in Rust) and the key is stored only on this machine at `~/Library/Application Support/com.miralite.app/tmdb.json` (mode 600) and never lands in the source tree or the binary. With no key, a failed request, or a browser preview, the app falls back to the bundled real TMDB snapshot.
 
 ### CAT playback chain and auth headers
 
@@ -163,8 +182,8 @@ Hop-by-hop headers in the `h` parameter (host / connection / content-length / ra
 
 ## Roadmap
 
-- Local library scraping: filename parsing → TMDB metadata matching → cached poster wall
-- EPG schedules and the full Xtream API (categories, VOD, series, time-shift)
+- Local library scraping: manual candidate correction and a persisted poster wall cache
+- Live time-shift / catch-up (`tv_archive` is already available)
 - Windows / Linux packaging and auto-update
 
 ## Compliance
