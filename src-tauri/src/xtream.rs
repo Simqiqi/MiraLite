@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 const USER_AGENT: &str = "MiraLite/0.1 (Tauri)";
 const TIMEOUT: Duration = Duration::from_secs(20);
-const MAX_BYTES: usize = 12 * 1024 * 1024;
+const MAX_BYTES: usize = 24 * 1024 * 1024;
 const EPG_TTL: Duration = Duration::from_secs(600);
 const EPG_MAX_ITEMS: usize = 200;
 
@@ -171,20 +171,36 @@ fn client() -> Result<reqwest::Client, String> {
 }
 
 /// 带大小上限地读完响应体，避免面板返回整站 m3u 时把内存吃满。
-async fn read_limited(resp: reqwest::Response) -> Result<String, String> {
+async fn read_limited_bytes(resp: reqwest::Response) -> Result<Vec<u8>, String> {
   let mut stream = resp.bytes_stream();
   let mut buf: Vec<u8> = Vec::new();
   while let Some(chunk) = stream.next().await {
     let chunk = chunk.map_err(|e| format!("读取响应失败: {e}"))?;
     if buf.len() + chunk.len() > MAX_BYTES {
-      return Err(format!(
-        "响应超过 {}MB，已中止",
-        MAX_BYTES / 1024 / 1024
-      ));
+      return Err(format!("响应超过 {}MB，已中止", MAX_BYTES / 1024 / 1024));
     }
     buf.extend_from_slice(&chunk);
   }
-  String::from_utf8(buf).map_err(|_| "响应不是 UTF-8 文本".to_string())
+  Ok(buf)
+}
+
+/// 文本解码：gzip 自动解压（XMLTV 常见 .xml.gz），再按 UTF-8 解析
+fn decode_bytes(bytes: Vec<u8>) -> Result<String, String> {
+  let raw = if bytes.len() > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+    use std::io::Read;
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(&bytes[..])
+      .read_to_end(&mut out)
+      .map_err(|e| format!("gzip 解压失败: {e}"))?;
+    out
+  } else {
+    bytes
+  };
+  String::from_utf8(raw).map_err(|_| "响应不是 UTF-8 文本".to_string())
+}
+
+async fn read_limited(resp: reqwest::Response) -> Result<String, String> {
+  decode_bytes(read_limited_bytes(resp).await?).map_err(|e| e)
 }
 
 async fn get_text(url: &str) -> Result<String, String> {
@@ -628,7 +644,7 @@ pub async fn http_get_text(url: String) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-  use super::{api_url, b64_decode, decode_text, map_programs, normalize_base};
+  use super::{api_url, b64_decode, decode_bytes, decode_text, map_programs, normalize_base};
   use serde_json::json;
 
   #[test]
@@ -664,6 +680,21 @@ mod tests {
       url,
       "http://h:8080/player_api.php?username=user%20name&password=p%40ss%26word&action=get_live_streams"
     );
+  }
+
+  #[test]
+  fn decodes_gzip_and_plain_text() {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+
+    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+    enc.write_all("hello 世界".as_bytes()).unwrap();
+    let gz = enc.finish().unwrap();
+    assert_eq!(decode_bytes(gz).unwrap(), "hello 世界");
+
+    let plain = "CCTV-1".as_bytes().to_vec();
+    assert_eq!(decode_bytes(plain).unwrap(), "CCTV-1");
   }
 
   #[test]

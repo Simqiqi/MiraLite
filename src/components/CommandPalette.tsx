@@ -10,6 +10,7 @@ import {
   Clock,
   CornerDownLeft,
   Film,
+  Popcorn,
   Search,
   Settings2,
   Sparkles,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useCatalog } from '../lib/catalog'
 import { useLibrary } from '../lib/store'
+import { cachedShortDramas } from '../lib/short'
 import type { MediaItem } from '../lib/types'
 
 const RECENT_KEY = 'miralite.recentQueries.v1'
@@ -124,6 +126,13 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
           run: () => go(() => navigate('/library')),
         },
         {
+          key: 'go-short',
+          title: '打开短剧',
+          sub: '红果云搬 · 榜单与搜索',
+          icon: <Popcorn size={15} className="text-white/70" />,
+          run: () => go(() => navigate('/short')),
+        },
+        {
           key: 'go-glass',
           title: '液态玻璃展示',
           sub: '材质、组件与光晕实验室',
@@ -161,6 +170,18 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
         sub: m.kind === 'series' ? '剧集 · 本地片库' : '电影 · 本地片库',
         icon: <Film size={15} className="text-white/70" />,
         run: () => go(() => navigate(`/item/${m.id}`)),
+      })
+    }
+
+    for (const d of cachedShortDramas()
+      .filter((x) => x.title.toLowerCase().includes(query))
+      .slice(0, 4)) {
+      list.push({
+        key: `sd-${d.id}`,
+        title: d.title,
+        sub: `短剧${d.episodes > 0 ? ` · ${d.episodes} 集` : ''}`,
+        icon: <Popcorn size={15} className="text-gold/80" />,
+        run: () => go(() => navigate(`/short?open=${encodeURIComponent(d.id)}`)),
       })
     }
 

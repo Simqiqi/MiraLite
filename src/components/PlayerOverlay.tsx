@@ -272,21 +272,54 @@ export default function PlayerOverlay({
 
   const epList = episodes ?? []
 
+  // 顶栏 3 秒无操作自动隐藏；鼠标移动 / 按键重新出现
+  const [hudVisible, setHudVisible] = useState(true)
+  const hudTimer = useRef<number | undefined>(undefined)
+  const showHud = useCallback(() => {
+    setHudVisible(true)
+    if (hudTimer.current) window.clearTimeout(hudTimer.current)
+    hudTimer.current = window.setTimeout(() => setHudVisible(false), 3000)
+  }, [])
+
+  useEffect(() => {
+    showHud()
+    return () => {
+      if (hudTimer.current) window.clearTimeout(hudTimer.current)
+    }
+  }, [showHud])
+
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-black">
-      <div className="flex items-center gap-2 px-4 py-2.5 text-[12px] text-white/70">
+    <div className="fixed inset-0 z-50 flex flex-col bg-black" onMouseMove={showHud} onClick={showHud}>
+      {/* 顶部渐变遮罩，让玻璃条上的字在亮画面上也清楚 */}
+      <div
+        className={`pointer-events-none absolute inset-x-0 top-0 z-10 h-24 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-300 ${
+          hudVisible ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
+
+      {/* 顶栏：左侧留出 macOS 红绿灯，控件统一成玻璃胶囊 */}
+      <div
+        data-tauri-drag-region
+        className={`relative z-20 flex items-center gap-2 px-4 pb-3 pl-[84px] pt-3 text-[12px] text-white/70 transition-opacity duration-300 ${
+          hudVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
+        }`}
+      >
         <button
           onClick={handleClose}
-          className="glass-btn flex items-center gap-1 rounded-md px-2 py-1 text-white/75 hover:text-white"
+          className="glass-capsule flex items-center gap-1.5 rounded-full px-3.5 py-2 text-white/85 transition hover:text-gold"
         >
           <ArrowLeft size={14} /> 返回
         </button>
-        {title && <span className="min-w-0 truncate text-[11.5px] text-white/55">{title}</span>}
+        {title && (
+          <span className="glass-capsule min-w-0 truncate rounded-full px-3.5 py-2 text-[11.5px] text-white/70">
+            {title}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           <button
             onClick={cycleRate}
             title="切换播放速度"
-            className="glass-btn flex items-center gap-1 rounded-md px-2 py-1 text-white/75 hover:text-white"
+            className="glass-capsule flex items-center gap-1 rounded-full px-3 py-2 text-white/80 transition hover:text-gold"
           >
             <Gauge size={13} /> {rate}x
           </button>
@@ -294,8 +327,8 @@ export default function PlayerOverlay({
             <button
               onClick={() => setShowEp((v) => !v)}
               title="选集"
-              className={`glass-btn flex items-center gap-1 rounded-md px-2 py-1 hover:text-white ${
-                showEp ? 'text-gold' : 'text-white/75'
+              className={`glass-capsule flex items-center gap-1 rounded-full px-3 py-2 transition hover:text-gold ${
+                showEp ? 'text-gold' : 'text-white/80'
               }`}
             >
               <ListVideo size={13} /> 选集
@@ -323,7 +356,7 @@ export default function PlayerOverlay({
           </div>
         )}
         {showEp && epList.length > 0 && (
-          <div className="absolute bottom-0 right-0 top-0 flex w-[286px] flex-col border-l border-white/10 bg-black/85 backdrop-blur">
+          <div className="glass-panel absolute bottom-0 right-0 top-0 flex w-[286px] flex-col rounded-none border-y-0 border-r-0">
             <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5 text-[12px] text-white/70">
               <span>选集 · {epList.length} 集</span>
               <button onClick={() => setShowEp(false)} className="text-white/45 hover:text-white">

@@ -225,6 +225,7 @@ export default function SourcesSection() {
   const [url, setUrl] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [epgUrl, setEpgUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
@@ -253,6 +254,7 @@ export default function SourcesSection() {
       url: url.trim(),
       username: tab === 'xtream' ? username.trim() : undefined,
       password: tab === 'xtream' ? password : undefined,
+      epgUrl: tab === 'm3u' ? epgUrl.trim() || undefined : undefined,
     })
 
     try {
@@ -282,6 +284,7 @@ export default function SourcesSection() {
       setUrl('')
       setUsername('')
       setPassword('')
+      setEpgUrl('')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       // 导入失败时回滚这次新建的空源，避免列表里留下 0 条目的空壳
@@ -586,6 +589,19 @@ export default function SourcesSection() {
               className="glass-input h-9 w-full rounded-lg px-3 text-[12.5px] text-fg"
             />
           </label>
+          {tab === 'm3u' && (
+            <label className="col-span-2 block">
+              <span className="mb-1.5 block text-[11.5px] text-muted">
+                XMLTV 节目单地址（可选，填了就能在直播页看到节目单）
+              </span>
+              <input
+                value={epgUrl}
+                onChange={(e) => setEpgUrl(e.target.value)}
+                placeholder="https://example.com/epg.xml 或 epg.xml.gz"
+                className="glass-input h-9 w-full rounded-lg px-3 text-[12.5px] text-fg"
+              />
+            </label>
+          )}
           {tab === 'xtream' && (
             <>
               <label className="block">

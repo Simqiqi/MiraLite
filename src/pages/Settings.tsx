@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { actions, useLibrary } from '../lib/store'
 import LocalLibrary from '../components/LocalLibrary'
@@ -7,6 +7,22 @@ import SiteSwitches from '../components/SiteSwitches'
 import { clearAllLineFails, failedLineCount } from '../lib/lines'
 import { clearPlayback, usePlayback } from '../lib/playback'
 import { applyBackup, exportSettings, pickBackup } from '../lib/backup'
+import WebdavDialog from '../components/WebdavDialog'
+import { getWebdav, type WebdavView } from '../lib/webdav'
+import { useChannelPrefs, setBlockAdult, setBlockedWords } from '../lib/channelPrefs'
+import {
+  diagExport,
+  diagInfo,
+  diagLogTail,
+  fmtBytes,
+  sdInstallRuntime,
+  sdRuntime,
+  shortCacheClear,
+  updateCheck,
+  type RuntimeInfo,
+  type ShortRuntime,
+  type UpdateInfo,
+} from '../lib/ops'
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -47,11 +63,35 @@ function Row({ title, desc, right }: { title: string; desc: string; right: React
 }
 
 export default function SettingsPage() {
-  const { prefs, progress, watchlist } = useLibrary()
+  const { prefs, progress, watchlist, sources, channels } = useLibrary()
   const navigate = useNavigate()
   const playback = usePlayback()
   const [backupMsg, setBackupMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [busy, setBusy] = useState<'export' | 'import' | null>(null)
+  const [webdav, setWebdav] = useState<WebdavView | null>(null)
+  const [info, setInfo] = useState<RuntimeInfo | null>(null)
+  const [runtime, setRuntime] = useState<ShortRuntime | null>(null)
+  const [update, setUpdate] = useState<UpdateInfo | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [installing, setInstalling] = useState(false)
+  const [logText, setLogText] = useState<string | null>(null)
+  const [opsMsg, setOpsMsg] = useState<string | null>(null)
+  const [webdavOpen, setWebdavOpen] = useState(false)
+  const prefsCh = useChannelPrefs()
+  const [words, setWords] = useState('')
+
+  useEffect(() => {
+    void getWebdav().then(setWebdav)
+  }, [webdavOpen])
+
+  useEffect(() => {
+    void diagInfo().then(setInfo)
+    void sdRuntime().then(setRuntime)
+  }, [installing])
+
+  useEffect(() => {
+    setWords(prefsCh.blockedWords.join(' '))
+  }, [prefsCh.blockedWords])
 
   async function doExport() {
     setBusy('export')
@@ -150,7 +190,47 @@ export default function SettingsPage() {
         <SiteSwitches />
       </Section>
 
+      <Section title="内容过滤">
+        <Row
+          title="成人频道过滤"
+          desc="直播频道名命中内置词（成人 / 福利 / 18+ 等）时不显示"
+          right={<Toggle on={prefsCh.blockAdult} onChange={(v) => setBlockAdult(v)} />}
+        />
+        <Row
+          title="自定义屏蔽词"
+          desc="空格分隔，命中即隐藏；只在开启过滤时生效"
+          right={
+            <div className="flex items-center gap-2">
+              <input
+                value={words}
+                onChange={(e) => setWords(e.target.value)}
+                placeholder="例如 莆田 赌博"
+                className="glass-input h-7 w-[180px] rounded-lg px-2 text-[11.5px] outline-none"
+              />
+              <button
+                onClick={() => setBlockedWords(words.split(/\s+/))}
+                className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-fg/80 hover:text-gold"
+              >
+                保存
+              </button>
+            </div>
+          }
+        />
+      </Section>
+
       <Section title="数据">
+        <Row
+          title="云端同步（WebDAV）"
+          desc={webdav?.configured ? `已配置：${webdav.url}` : '把配置备份传到自己的网盘，换机时一键恢复'}
+          right={
+            <button
+              onClick={() => setWebdavOpen(true)}
+              className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-fg/80 transition hover:text-gold"
+            >
+              {webdav?.configured ? '管理' : '配置'}
+            </button>
+          }
+        />
         <Row
           title="备份配置"
           desc="把源、收藏、追剧、观看进度、CAT 订阅与脚本导出成 JSON（不含缓存）"
@@ -226,6 +306,165 @@ export default function SettingsPage() {
           }
         />
       </Section>
+
+      <Section title="关于与更新">
+        <Row
+          title={`MiraLite ${info?.version ?? '—'}`}
+          desc={
+            update
+              ? update.hasUpdate
+                ? `发现新版本 ${update.latest}（当前 ${update.current}）`
+                : update.message || `已是最新版本（${update.current}）`
+              : '检查 GitHub Release 是否有新版本'
+          }
+          right={
+            <div className="flex items-center gap-2">
+              {update?.hasUpdate && update.dmgUrl && (
+                <button
+                  onClick={() => window.open(update.dmgUrl ?? '', '_blank')}
+                  className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-gold"
+                >
+                  下载安装包
+                </button>
+              )}
+              {update?.hasUpdate && (
+                <button
+                  onClick={() => window.open(update.htmlUrl, '_blank')}
+                  className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-fg/80 hover:text-gold"
+                >
+                  发布说明
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  setChecking(true)
+                  setOpsMsg(null)
+                  void updateCheck()
+                    .then(setUpdate)
+                    .catch((e) => setOpsMsg(e instanceof Error ? e.message : String(e)))
+                    .finally(() => setChecking(false))
+                }}
+                disabled={checking}
+                className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-fg/80 hover:text-gold disabled:opacity-50"
+              >
+                {checking ? '检查中…' : '检查更新'}
+              </button>
+            </div>
+          }
+        />
+        <Row
+          title="短剧运行环境（Node）"
+          desc={
+            runtime?.source === 'system'
+              ? `使用系统 Node：${runtime.node}`
+              : runtime?.source === 'bundled'
+                ? '使用内置运行时'
+                : runtime?.hint || '未检测到'
+          }
+          right={
+            runtime?.source === 'none' ? (
+              <button
+                onClick={() => {
+                  setInstalling(true)
+                  setOpsMsg('正在下载 Node 运行时（约 40MB）…')
+                  void sdInstallRuntime()
+                    .then((p) => setOpsMsg(`已安装：${p}`))
+                    .catch((e) => setOpsMsg(e instanceof Error ? e.message : String(e)))
+                    .finally(() => setInstalling(false))
+                }}
+                disabled={installing}
+                className="glass-primary rounded-lg px-2.5 py-1 text-[11.5px] font-semibold disabled:opacity-50"
+              >
+                {installing ? '下载中…' : '下载运行时'}
+              </button>
+            ) : (
+              <span className="text-[11px] text-emerald-300/90">可用</span>
+            )
+          }
+        />
+        <Row
+          title="短剧缓存"
+          desc={`${info?.cacheShortFiles ?? 0} 个文件 · ${fmtBytes(info?.cacheShortBytes ?? 0)}，清理后下次播放会重新解密`}
+          right={
+            <button
+              onClick={() => {
+                void shortCacheClear()
+                  .then((freed) => {
+                    setOpsMsg(`已清理 ${fmtBytes(freed)}`)
+                    return diagInfo().then(setInfo)
+                  })
+                  .catch((e) => setOpsMsg(e instanceof Error ? e.message : String(e)))
+              }}
+              className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-muted hover:text-red-300"
+            >
+              清理
+            </button>
+          }
+        />
+        <Row
+          title="诊断与日志"
+          desc={logText ? '已加载日志（见下方）' : '查看运行日志，或导出诊断包给开发者排查'}
+          right={
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setOpsMsg(null)
+                  void diagLogTail(400)
+                    .then(setLogText)
+                    .catch((e) => setOpsMsg(e instanceof Error ? e.message : String(e)))
+                }}
+                className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-fg/80 hover:text-gold"
+              >
+                查看日志
+              </button>
+              <button
+                onClick={() => {
+                  setOpsMsg('正在导出…')
+                  const payload = {
+                    app: 'MiraLite',
+                    exportedAt: new Date().toISOString(),
+                    info,
+                    runtime,
+                    sources: {
+                      total: sources.length,
+                      kinds: sources.map((s) => ({ name: s.name, kind: s.kind, enabled: s.enabled, hasEpg: !!s.epgUrl })),
+                    },
+                    counts: {
+                      channels: channels.length,
+                      watchlist: watchlist.length,
+                      playback: playback.length,
+                    },
+                    prefs,
+                  }
+                  void diagLogTail(800)
+                    .then((logs) => diagExport({ ...payload, logs }))
+                    .then((r) => setOpsMsg(`已导出：${r.path}`))
+                    .catch((e) => setOpsMsg(e instanceof Error ? e.message : String(e)))
+                }}
+                className="glass-btn rounded-lg px-2.5 py-1 text-[11.5px] text-muted hover:text-gold"
+              >
+                导出诊断包
+              </button>
+            </div>
+          }
+        />
+        {opsMsg && <div className="px-5 py-2 text-[10.5px] text-muted">{opsMsg}</div>}
+        {logText && (
+          <div className="px-5 pb-3">
+            <pre className="no-scrollbar max-h-[220px] overflow-auto whitespace-pre-wrap rounded-lg bg-black/35 p-2.5 text-[10px] leading-relaxed text-muted">
+              {logText}
+            </pre>
+            <button
+              onClick={() => setLogText(null)}
+              className="glass-btn mt-2 rounded-lg px-2.5 py-1 text-[11px] text-muted hover:text-fg"
+            >
+              收起日志
+            </button>
+          </div>
+        )}
+      </Section>
+
+      <WebdavDialog open={webdavOpen} onClose={() => setWebdavOpen(false)} />
 
       <p className="text-[11px] leading-relaxed text-muted/70">
         MiraLite 不提供任何内容源，仅作为客户端读取你自行连接的来源。所有观看记录与设置都保存在本机。

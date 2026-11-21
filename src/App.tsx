@@ -8,6 +8,7 @@ import LivePage from './pages/Live'
 import MePage from './pages/Me'
 import GlassPage from './pages/Glass'
 import LibraryPage from './pages/Library'
+import ShortPage from './pages/Short'
 import CatPage from './pages/Cat'
 import CatSearchPage from './pages/CatSearch'
 import CatDetailPage from './pages/CatDetail'
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/me" element={<MePage />} />
         <Route path="/glass" element={<GlassPage />} />
         <Route path="/library" element={<LibraryPage />} />
+        <Route path="/short" element={<ShortPage />} />
         <Route path="/movies" element={<MoviesPage />} />
         <Route path="/tv" element={<TvPage />} />
         <Route path="/cat" element={<CatPage />} />

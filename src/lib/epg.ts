@@ -254,3 +254,81 @@ export async function loadEpgBatch(
   await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker))
   return result
 }
+// ---------------------------------------------------------------- XMLTV（给 M3U 源补节目单）
+
+const XMLTV_KEY = 'miralite.xmltv.v1|'
+const XMLTV_TTL = 6 * 60 * 60 * 1000
+
+interface XmltvCache {
+  at: number
+  channels: Record<string, EpgProgram[]>
+}
+
+function readXmltvCache(key: string): XmltvCache | null {
+  const memHit = mem.get(`xmltv:${key}`) as unknown as { at: number; list: EpgProgram[] } | undefined
+  if (memHit) return { at: memHit.at, channels: memHit.list as unknown as Record<string, EpgProgram[]> }
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as XmltvCache
+    if (!parsed?.at || Date.now() - parsed.at >= XMLTV_TTL) return null
+    mem.set(`xmltv:${key}`, { at: parsed.at, list: parsed.channels as unknown as EpgProgram[] })
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writeXmltvCache(key: string, channels: Record<string, EpgProgram[]>) {
+  const at = Date.now()
+  mem.set(`xmltv:${key}`, { at, list: channels as unknown as EpgProgram[] })
+  try {
+    localStorage.setItem(key, JSON.stringify({ at, channels }))
+  } catch {
+    /* 太大就只留内存 */
+  }
+}
+
+/**
+ * 拉取并解析一个源的 XMLTV，只保留指定频道的节目。
+ * 结果按 URL 缓存 6 小时（内存 + localStorage）。
+ */
+export async function loadXmltvForSource(
+  source: Source,
+  channelIds: string[],
+  opts: { force?: boolean } = {},
+): Promise<Record<string, EpgProgram[]>> {
+  const url = (source.epgUrl ?? '').trim()
+  const wanted = new Set(channelIds.filter(Boolean))
+  if (!url || wanted.size === 0) return {}
+
+  const key = `${XMLTV_KEY}${url}`
+  const cached = opts.force ? null : readXmltvCache(key)
+  if (cached) {
+    const hit: Record<string, EpgProgram[]> = {}
+    let covered = 0
+    for (const id of wanted) {
+      const list = cached.channels[id]
+      if (list && list.length > 0) {
+        hit[id] = list
+        covered += 1
+      }
+    }
+    // 覆盖到一半以上就当命中，避免每次进页面都重拉大文件
+    if (covered >= Math.min(wanted.size, 3)) return hit
+  }
+
+  const { fetchText } = await import('./net')
+  const { parseXmltv } = await import('./xmltv')
+  const text = await fetchText(url)
+  const parsed = parseXmltv(text, { channelIds: wanted, perChannel: 72, total: 12000 })
+
+  const channels: Record<string, EpgProgram[]> = {}
+  for (const [id, list] of parsed) {
+    if (list.length > 0) channels[id] = list
+  }
+  if (Object.keys(channels).length > 0) {
+    writeXmltvCache(key, { ...(readXmltvCache(key)?.channels ?? {}), ...channels })
+  }
+  return channels
+}

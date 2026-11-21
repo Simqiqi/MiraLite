@@ -63,6 +63,27 @@ The CAT/TVBox spider engine is built in, so you can browse, search and play titl
 
 ## What's in this release
 
+- **About & updates**: a new settings section showing the version and checking GitHub Releases on demand (public API, no signing keys), with direct links to the installer and release notes. The repo also ships a tag-driven CI workflow that builds the macOS bundle and opens a draft release.
+- **Diagnostics**: view runtime logs, export a diagnostics bundle (app info, environment, source/watchlist counts, recent logs) to Downloads, and see/clear the short-drama cache from settings.
+- **Short-drama runtime**: detects a system Node and otherwise offers a one-click download of an official Node runtime into the app directory, so the sidecar no longer depends on a dev environment.
+- **XMLTV guides for M3U sources**: the source form gained an "XMLTV URL" field (`.xml` and `.xml.gz` both work — Rust gunzips automatically), and the live page matches programmes to channels by `tvg-id`, sharing the same cache and UI as Xtream's EPG.
+- **Multi-view**: a new "multi" mode on the live page plays four channels in a 2×2 grid — click a tile to make it the audible one, and assign channels per tile or shuffle the set.
+- **Channel numbers and grouping**: each card shows its channel number (click the number to customise it), digit keys on the player jump by that number, and the channel wall groups channels under collapsible category headers.
+- **Adult-channel filter**: a Content filtering section with built-in words plus your own blocklist.
+- **WebDAV cloud sync**: store your backup on your own cloud (Jianguoyun / Nextcloud / Synology) and restore it on another machine.
+- **Short-drama follow**: follow a series and get a system notification when new episodes appear.
+- **Short-drama offline queue**: from the drawer you can queue "first 20" or "all" episodes; the sidecar downloads and CENC-decrypts them one by one into a local cache, with a live progress panel and direct playback of finished items. If upstream rate-limits, it rotates the anonymous device and keeps going.
+- **Short-drama progress and binge play**: per-series resume (episode + second) with a "continue watching" row, plus "play from the start" that loads the whole season into the play queue and auto-advances.
+- **Intro/outro skip**: mark the intro end and outro start from the player bar (or `[` `]`); the intro is skipped automatically and the outro offers a "skip · next episode" action.
+- **Play queue**: "play whole season" in the library series drawer and for short dramas; the player shows the next item and advances on `N` or when an episode ends.
+- **Short dramas in ⌘K**: browsed titles are cached locally so the palette can find and open them.
+- **Short-drama page (free)**: a new sidebar entry backed by a local sidecar (Node + the open-source [openhongguo](https://github.com/beilunyang/openhongguo) anonymous SDK — no login, no fees). New releases, search, details and episode lists browse freely; picking an episode downloads the segment and decrypts it locally with the content key (Hongguo uses CENC), then hands the file to the built-in player. Cache lives in `~/Library/Caches/com.miralite.app/short-drama`.
+- **Local/direct playback**: the player accepts `mode=url` for both http(s) links and local asset files.
+- **External players**: with IINA or VLC installed, the player gains a button that hands the stream to it — MKV and unusual codecs that WebKit refuses now play fine.
+- **Live catch-up**: programmes in the guide that already aired become playable for channels that support archive, starting from the panel's timeshift URL.
+- **Programme reminders**: set a reminder on any upcoming programme and get a system notification five minutes before it starts.
+- **Library progress**: VOD movies now have a stable id, so quitting halfway remembers the position; the library shows a "continue watching" row and posters carry progress bars.
+- **Faster hands**: type a channel number on the live page to jump straight to it (Enter to confirm, auto-commits after 1.5s), and ⌘1–⌘6 switch between Home / Watchlist / Live / Library / Me / Settings.
 - **Library (Xtream VOD / series)**: a new sidebar entry with category filters and title search. Movies play on click; series slide out a season/episode panel and start from any episode. Listings cache for 20 minutes per session, multiple Xtream sources switch from the corner, and playback URLs are assembled in the player from the source credentials instead of being persisted.
 - **Hero and row details**: four small "up next" posters stack on the right of the hero and switch on click; the top-rated rows stamp their first ten posters with oversized outlined rank numbers for an editorial Top 10 feel.
 - **More atmosphere on Home**: the hero now parallaxes gently against scroll, samples a dominant colour from each backdrop to retint the app's ambient glow, and a very faint cursor spotlight sweeps the glass edges as the pointer moves.
@@ -87,22 +108,23 @@ The CAT/TVBox spider engine is built in, so you can browse, search and play titl
 
 ## Features
 
-- Minimal left nav (Home / Watchlist / Live / Library / Me / Settings; shifted down to clear the macOS traffic lights) plus top search and the ⌘K global palette
-- Library: Xtream VOD movies / series with category filters, search, a season-episode drawer and source switching
+- Minimal left nav (Home / Watchlist / Live / Library / Short / Me / Settings, ⌘1–⌘7 shortcuts; shifted down to clear the macOS traffic lights) plus top search and the ⌘K global palette
+- Short drama: Hongguo new releases / search / details / episodes, offline download queue, resume and binge play (local CENC decryption, free, no account)
+- Library: Xtream VOD movies / series with category filters, search, a season-episode drawer, source switching, continue-watching and resume
 - Me: favourites (watchlist + favourited channels) and history (continue watching + recent channels)
-- Live page: category filter, channel search, favourites and recents, health check (dim/hide dead channels, zapping skips them), EPG now/next, full-day guide drawer, timeline view, archive badge
-- Home: cinematic hero (backdrop + overview + find-a-route, rotating every twelve seconds, parallax, backdrop-driven ambient tint and a thumbnail strip), continue watching as 16:9 cards, then TMDB poster rows for In Theatres / Popular Movies / Popular TV / Top Rated Movies / Top Rated TV; posters reveal their overview on hover, rows page left/right, top-rated rows carry outlined Top 10 numbers, and the first paint is skeleton-based
+- Live page: XMLTV guides for M3U sources, multi-view (2×2), custom channel numbers with collapsible groups, adult filter, category filter, channel search, favourites and recents, health check (dim/hide dead channels, zapping skips them), EPG now/next, full-day guide drawer, timeline view, archive badge
+- Home: cinematic hero (backdrop + overview + find-a-route, rotating every twelve seconds, parallax, backdrop-driven ambient tint, thumbnail strip), continue watching as 16:9 cards, then TMDB poster rows for In Theatres / Popular Movies / Popular TV / Top Rated Movies / Top Rated TV; posters reveal their overview on hover, rows page left/right, top-rated rows carry outlined Top 10 numbers, and the first paint is skeleton-based
 - CAT page (route kept for home links): site list, category browsing, concurrent cross-site search, cloud-drive login guide, no-login-only site filter
 - CAT detail: multiple routes plus episode list, automatic route fallback, auth-header passthrough playback
 - Movies / TV pages (routes kept, not in the menu): genre filter, sorting, progress bar
-- Player: hls.js adaptive streaming with auto-reconnect, custom control bar, progress write-back, keyboard shortcuts (Space / ←→ / M / Esc, ↑↓ zapping on live), local subtitle switching (srt / ass / vtt, GBK aware), picture-in-picture, sleep timer
+- Player: hls.js adaptive streaming with auto-reconnect, custom control bar, progress write-back, keyboard shortcuts (Space / ←→ / M / Esc, ↑↓ or number keys to zap on live), local subtitle switching (srt / ass / vtt, GBK aware), picture-in-picture, sleep timer, external player hand-off
 - Settings:
   - Playback: auto-play next, preferred quality
   - Recommendations: TastePrint toggle
   - Sources:
     - CAT subscriptions: multiple sources saved locally, rename and delete, instant switching between them, "test" using an isolated temporary engine, and the active subscription warms up on launch
     - Cloud-drive setup, M3U / Xtream / local folder onboarding (Xtream is validated before import and brings categories plus EPG), connected source management
-  - Data: config backup / restore (JSON), clear watchlist and watch history
+  - Data: config backup / restore (JSON), WebDAV sync, content filtering, clear watchlist and watch history
 - Built and packaged as `.app` / `.dmg`
 
 ## Build & Run

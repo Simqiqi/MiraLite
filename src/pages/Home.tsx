@@ -764,6 +764,7 @@ export default function HomePage() {
               .map((g) => (
                 <RankingRow key={g.key} group={g} onOpen={searchFor} />
               ))}
+
           </div>
         </>
       )}

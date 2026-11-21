@@ -51,6 +51,8 @@ export function parseM3U(text: string, sourceId?: string): MediaItem[] {
         sourceId,
         group,
         logo: attrs['tvg-logo'],
+        // tvg-id 用来和 XMLTV 里的 channel id 对上
+        epgChannelId: attrs['tvg-id'] || undefined,
       })
       pending = null
     }

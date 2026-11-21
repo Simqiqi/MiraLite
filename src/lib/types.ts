@@ -44,6 +44,8 @@ export interface Source {
   addedAt: number
   enabled: boolean
   itemCount: number
+  /** M3U 源的 XMLTV 节目单地址（可选） */
+  epgUrl?: string
 }
 
 export interface ProgressEntry {

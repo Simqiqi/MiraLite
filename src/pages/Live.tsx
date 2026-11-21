@@ -6,15 +6,25 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Activity, Clock, History, Loader2, Play, Radio, RefreshCw, Search, Star, Tv, X } from 'lucide-react'
+import { Activity, Bell, BellRing, Clock, History, Loader2, Play, Radio, RefreshCw, Rewind, Search, Star, Tv, X } from 'lucide-react'
 import { actions, useLibrary } from '../lib/store'
 import { probeChannels, useHealth } from '../lib/health'
+import {
+  isBlocked,
+  orderedChannels,
+  setChannelNumber,
+  toggleCollapsed,
+  useChannelPrefs,
+} from '../lib/channelPrefs'
+import Hls from 'hls.js'
+import { addReminder, hasReminder, removeReminder, reminderId, useReminders, LEAD_MS } from '../lib/reminders'
 import type { MediaItem, Source } from '../lib/types'
 import {
   fmtClock,
   fmtRange,
   loadEpg,
   loadEpgBatch,
+  loadXmltvForSource,
   pickNowNext,
   programsForDay,
   windowOf,
@@ -104,16 +114,22 @@ interface Picked {
 function GuideDrawer({
   picked,
   loading,
+  now,
   onClose,
   onPlay,
+  onCatchup,
 }: {
   picked: Picked
   loading: boolean
+  now: number
   onClose: () => void
   onPlay: () => void
+  onCatchup: (p: EpgProgram) => void
 }) {
+  const reminders = useReminders()
   const rows = programsForDay(picked.list)
   const nn = pickNowNext(picked.list)
+  const canCatchup = !!picked.item.tvArchive && typeof picked.item.streamId === 'number'
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -186,6 +202,39 @@ function GuideDrawer({
                   {p.description && (
                     <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted">{p.description}</div>
                   )}
+                  <div className="mt-1 flex items-center gap-2">
+                    {canCatchup && w.end <= now && (
+                      <button
+                        onClick={() => onCatchup(p)}
+                        className="flex items-center gap-1 rounded-md bg-white/6 px-2 py-0.5 text-[10.5px] text-muted hover:text-gold"
+                      >
+                        <Rewind size={10} /> 回看
+                      </button>
+                    )}
+                    {w.start > now && (
+                      <button
+                        onClick={() => {
+                          const id = reminderId(picked.item.id, w.start)
+                          if (reminders.some((r) => r.id === id)) removeReminder(id)
+                          else
+                            addReminder({
+                              id,
+                              at: w.start - LEAD_MS,
+                              title: `即将开播：${p.title}`,
+                              body: `${picked.item.title} · ${fmtClock(w.start)} 开始`,
+                            })
+                        }}
+                        className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] ${
+                          hasReminder(picked.item.id, w.start)
+                            ? 'bg-gold/15 text-gold'
+                            : 'bg-white/6 text-muted hover:text-gold'
+                        }`}
+                      >
+                        {hasReminder(picked.item.id, w.start) ? <BellRing size={10} /> : <Bell size={10} />}
+                        {hasReminder(picked.item.id, w.start) ? '已设提醒' : '提醒'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             )
@@ -297,13 +346,125 @@ function TimelineView({
   )
 }
 
+/** 多屏同看：2×2 四路同时播，点哪格哪格出声 */
+function MultiView({ items }: { items: MediaItem[] }) {
+  const [slots, setSlots] = useState<Array<MediaItem | null>>(() => items.slice(0, 4))
+  const [active, setActive] = useState(0)
+  const [pick, setPick] = useState(0)
+  const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
+  const hlsRefs = useRef<Array<Hls | null>>([])
+
+  useEffect(() => {
+    slots.forEach((item, i) => {
+      const video = videoRefs.current[i]
+      if (!video) return
+      hlsRefs.current[i]?.destroy()
+      hlsRefs.current[i] = null
+      video.removeAttribute('src')
+      video.load()
+      if (!item?.streamUrl) return
+      if (Hls.isSupported()) {
+        const hls = new Hls({ enableWorker: true, lowLatencyMode: true })
+        hls.loadSource(item.streamUrl)
+        hls.attachMedia(video)
+        hlsRefs.current[i] = hls
+      } else {
+        video.src = item.streamUrl
+      }
+      void video.play().catch(() => {})
+    })
+    return () => {
+      hlsRefs.current.forEach((h) => h?.destroy())
+      hlsRefs.current = []
+    }
+  }, [slots])
+
+  useEffect(() => {
+    videoRefs.current.forEach((v, i) => {
+      if (v) v.muted = i !== active
+    })
+  }, [active, slots])
+
+  const fill = (start: number) => {
+    const next: Array<MediaItem | null> = []
+    for (let i = 0; i < 4; i += 1) next.push(items[(start + i) % Math.max(items.length, 1)] ?? null)
+    setSlots(next)
+  }
+
+  const setSlot = (index: number, item: MediaItem) => {
+    setSlots((prev) => prev.map((x, i) => (i === index ? item : x)))
+    setActive(index)
+  }
+
+  return (
+    <div className="mx-10 mt-4">
+      <div className="grid grid-cols-2 gap-2.5">
+        {slots.map((item, i) => (
+          <button
+            key={i}
+            onClick={() => {
+              setActive(i)
+              setPick(i)
+            }}
+            className={`relative aspect-video overflow-hidden rounded-xl border transition ${
+              active === i ? 'border-gold/60' : 'border-white/10 hover:border-white/25'
+            }`}
+          >
+            <video
+              ref={(el) => {
+                videoRefs.current[i] = el
+              }}
+              playsInline
+              muted
+              className="h-full w-full bg-black object-contain"
+            />
+            <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/85 to-transparent px-2.5 pb-1.5 pt-6 text-[10.5px] text-white/80">
+              <span className="truncate">{item ? item.title : '空'}</span>
+              <span className={active === i ? 'text-gold' : 'text-white/40'}>{active === i ? '出声' : '静音'}</span>
+            </span>
+            {pick === i && (
+              <span className="absolute right-2 top-2 rounded bg-gold/85 px-1.5 py-0.5 text-[9.5px] font-semibold text-black">
+                选台中
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-3 flex items-center gap-2">
+        <span className="shrink-0 text-[11px] text-muted">给第 {pick + 1} 格选台</span>
+        <button
+          onClick={() => fill(Math.floor(Math.random() * Math.max(items.length, 1)))}
+          className="glass-chip shrink-0 rounded-lg px-2.5 py-1 text-[11px] text-muted hover:text-gold"
+        >
+          随机换一组
+        </button>
+      </div>
+
+      <div className="no-scrollbar mt-2 flex gap-2 overflow-x-auto pb-1">
+        {items.slice(0, 120).map((c) => (
+          <button
+            key={c.id}
+            onClick={() => setSlot(pick, c)}
+            className="glass-chip flex shrink-0 items-center gap-1.5 rounded-lg py-1 pl-1 pr-2.5 text-[11px] text-fg/80 hover:text-gold"
+          >
+            <ChannelLogo item={c} size={18} />
+            <span className="max-w-[110px] truncate">{c.title}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function LivePage() {
   const navigate = useNavigate()
   const { sources, channels, channelFavorites, channelRecent } = useLibrary()
   const health = useHealth()
+  const prefs = useChannelPrefs()
   const [query, setQuery] = useState('')
   const [group, setGroup] = useState('全部')
-  const [view, setView] = useState<'grid' | 'timeline'>('grid')
+  const [view, setView] = useState<'grid' | 'timeline' | 'multi'>('grid')
   const [epg, setEpg] = useState<Record<string, EpgProgram[]>>({})
   const [loading, setLoading] = useState(false)
   const [picked, setPicked] = useState<{ item: MediaItem; source?: Source } | null>(null)
@@ -313,6 +474,8 @@ export default function LivePage() {
   const [probing, setProbing] = useState(false)
   const [probeDone, setProbeDone] = useState(0)
   const [hideDead, setHideDead] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
   const probeSignal = useRef<{ cancelled: boolean }>({ cancelled: false })
 
   const sourceById = useMemo(() => {
@@ -322,9 +485,17 @@ export default function LivePage() {
   }, [sources])
 
   const liveChannels = useMemo(
-    () => channels.filter((c) => c.kind === 'channel' && (!c.sourceId || sourceById.has(c.sourceId))),
-    [channels, sourceById],
+    () =>
+      channels.filter(
+        (c) => c.kind === 'channel' && (!c.sourceId || sourceById.has(c.sourceId)) && !isBlocked(c.title),
+      ),
+    // prefs 变化（开关过滤）时也要重算
+    [channels, sourceById, prefs.blockAdult, prefs.blockedWords],
   )
+
+  /** 频道号：自定义优先，其余按原顺序补号 */
+  const numbered = useMemo(() => orderedChannels(liveChannels), [liveChannels, prefs.numbers])
+  const numberById = useMemo(() => new Map(numbered.map((x) => [x.item.id, x.number])), [numbered])
 
   const groups = useMemo(() => {
     const count = new Map<string, number>()
@@ -373,6 +544,30 @@ export default function LivePage() {
     [liveChannels, channelFavorites],
   )
 
+  /** 回看：拼 timeshift 地址跳到播放页 */
+  function catchup(channel: MediaItem, program: EpgProgram) {
+    const src = channel.sourceId ? sourceById.get(channel.sourceId) : undefined
+    if (!src || typeof channel.streamId !== 'number') return
+    const w = windowOf(program)
+    const dur = Math.max(1, Math.round((w.end - w.start) / 60_000))
+    const d = new Date(w.start)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const start = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}:${pad(d.getHours())}-${pad(
+      d.getMinutes(),
+    )}`
+    const params = new URLSearchParams({
+      remote: '1',
+      mode: 'timeshift',
+      source: src.id,
+      id: String(channel.streamId),
+      start,
+      dur: String(dur),
+      name: `${channel.title} · ${program.title}`,
+    })
+    setPicked(null)
+    navigate(`/play/_?${params.toString()}`)
+  }
+
   function playChannel(c: MediaItem) {
     actions.markChannelPlayed(c.id)
     navigate(`/play/${c.id}`)
@@ -409,24 +604,40 @@ export default function LivePage() {
     }
   }, [])
 
-  // 只给 Xtream 源拉 EPG（M3U 源没有 player_api 凭据）
+  /**
+   * 拉节目单：
+   * - Xtream 源走 player_api（get_simple_data_table）
+   * - M3U 源如果填了 XMLTV 地址，就抓下来解析后按 tvg-id 对上
+   */
   async function loadAllEpg(force = false) {
-    const bySource = new Map<string, MediaItem[]>()
+    const xtreamBySource = new Map<string, MediaItem[]>()
+    const xmltvBySource = new Map<string, { source: Source; ids: string[]; idMap: Map<string, string> }>()
+
     for (const c of liveChannels) {
       const src = c.sourceId ? sourceById.get(c.sourceId) : undefined
-      if (!src || src.kind !== 'xtream' || typeof c.streamId !== 'number') continue
-      const arr = bySource.get(src.id) ?? []
-      arr.push(c)
-      bySource.set(src.id, arr)
+      if (!src) continue
+      if (src.kind === 'xtream' && typeof c.streamId === 'number') {
+        const arr = xtreamBySource.get(src.id) ?? []
+        arr.push(c)
+        xtreamBySource.set(src.id, arr)
+      } else if (src.kind === 'm3u' && src.epgUrl && c.epgChannelId) {
+        const entry =
+          xmltvBySource.get(src.id) ?? { source: src, ids: [] as string[], idMap: new Map<string, string>() }
+        entry.ids.push(c.epgChannelId)
+        if (!entry.idMap.has(c.epgChannelId)) entry.idMap.set(c.epgChannelId, c.id)
+        xmltvBySource.set(src.id, entry)
+      }
     }
-    if (bySource.size === 0) {
-      setNotice('当前频道来自 M3U / 本地源，没有可用的 EPG 接口')
+
+    if (xtreamBySource.size === 0 && xmltvBySource.size === 0) {
+      setNotice('当前频道没有可用的节目单来源：Xtream 源需要面板提供 EPG，M3U 源需要在片源里填 XMLTV 地址')
       return
     }
+
     setLoading(true)
     setNotice(null)
     try {
-      for (const [sourceId, items] of bySource) {
+      for (const [sourceId, items] of xtreamBySource) {
         const src = sourceById.get(sourceId)
         if (!src) continue
         const acc: Record<string, EpgProgram[]> = {}
@@ -439,8 +650,23 @@ export default function LivePage() {
             acc[id] = list
           },
         })
-        // 攒完一个源再更新一次，避免几十次零碎渲染
         if (Object.keys(acc).length > 0) setEpg((prev) => ({ ...prev, ...acc }))
+      }
+
+      for (const { source, ids, idMap } of xmltvBySource.values()) {
+        try {
+          const parsed = await loadXmltvForSource(source, ids, { force })
+          const patch: Record<string, EpgProgram[]> = {}
+          for (const [epgId, list] of Object.entries(parsed)) {
+            const chId = idMap.get(epgId)
+            if (chId && list.length > 0) patch[chId] = list
+          }
+          const matched = Object.keys(patch).length
+          if (matched > 0) setEpg((prev) => ({ ...prev, ...patch }))
+          else setNotice(`${source.name}：XMLTV 里没有匹配到频道（检查片源里的 tvg-id 是否和节目单一致）`)
+        } catch (e) {
+          setNotice(`${source.name} 的 XMLTV 拉取失败：${e instanceof Error ? e.message : String(e)}`)
+        }
       }
     } catch (e) {
       setNotice(e instanceof Error ? e.message : String(e))
@@ -459,6 +685,116 @@ export default function LivePage() {
     const t = window.setInterval(() => setNow(Date.now()), 30_000)
     return () => window.clearInterval(t)
   }, [])
+
+  /** 频道墙按分组分区（「全部」时带折叠头，选了具体分类就铺平） */
+  const groupSections = useMemo(() => {
+    const map = new Map<string, MediaItem[]>()
+    for (const c of visible) {
+      const g = c.group || c.genres[0] || '未分组'
+      const arr = map.get(g) ?? []
+      arr.push(c)
+      map.set(g, arr)
+    }
+    if (group !== '全部') return [[group, visible]] as Array<[string, MediaItem[]]>
+    return [...map.entries()].sort((a, b) => b[1].length - a[1].length)
+  }, [visible, group])
+
+  /** 单张频道卡：带自定义频道号（点数字可改） */
+  function renderCard(c: MediaItem) {
+    const list = epg[c.id]
+    const num = numberById.get(c.id)
+    return (
+      <div
+        key={c.id}
+        className={`glass-panel group relative cursor-pointer overflow-hidden rounded-2xl p-3.5 transition hover:border-gold/30 ${
+          health[c.id]?.ok === false ? 'opacity-55' : ''
+        }`}
+        onClick={() => playChannel(c)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') playChannel(c)
+        }}
+      >
+        {health[c.id]?.ok === false && (
+          <span className="absolute right-2 top-2 rounded-md bg-red-500/15 px-1.5 py-0.5 text-[9.5px] text-red-300/90">
+            失效
+          </span>
+        )}
+        <div className="flex items-center gap-3">
+          {editingId === c.id ? (
+            <input
+              autoFocus
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value.replace(/[^0-9]/g, ''))}
+              onClick={(e) => e.stopPropagation()}
+              onBlur={() => {
+                setChannelNumber(c.id, Number(editValue) || 0)
+                setEditingId(null)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setChannelNumber(c.id, Number(editValue) || 0)
+                  setEditingId(null)
+                }
+                if (e.key === 'Escape') setEditingId(null)
+              }}
+              className="h-7 w-11 shrink-0 rounded-md bg-white/12 text-center text-[11.5px] tabular-nums text-fg outline-none"
+            />
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setEditingId(c.id)
+                setEditValue(num ? String(num) : '')
+              }}
+              title="点击设置频道号"
+              className="w-7 shrink-0 text-center text-[12px] tabular-nums text-muted/60 transition hover:text-gold"
+            >
+              {num ?? '—'}
+            </button>
+          )}
+          <ChannelLogo item={c} />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-medium">{c.title}</div>
+            <div className="truncate text-[10.5px] text-muted">{c.group || '未分组'}</div>
+          </div>
+          <Play
+            size={13}
+            className="shrink-0 text-muted opacity-0 transition group-hover:opacity-100 group-hover:text-gold"
+          />
+        </div>
+
+        <NowStrip list={list} fallback="暂无节目单" />
+
+        <div className="mt-2.5 flex items-center justify-between">
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              void openGuide(c)
+            }}
+            className="flex items-center gap-1 text-[10.5px] text-muted/80 hover:text-gold"
+          >
+            <Clock size={10.5} /> 节目单
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              actions.toggleChannelFavorite(c.id)
+            }}
+            title={channelFavorites.includes(c.id) ? '取消收藏' : '收藏频道'}
+            className={`rounded-md p-1 transition ${
+              channelFavorites.includes(c.id)
+                ? 'text-gold'
+                : 'text-muted/50 opacity-0 group-hover:opacity-100 hover:text-gold'
+            }`}
+          >
+            <Star size={12} fill={channelFavorites.includes(c.id) ? 'currentColor' : 'none'} />
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   const pickedSource = picked?.item.sourceId ? sourceById.get(picked.item.sourceId) : undefined
   const pickedList = picked ? epg[picked.item.id] ?? [] : []
@@ -521,6 +857,7 @@ export default function LivePage() {
                 [
                   ['grid', '频道墙'],
                   ['timeline', '时间轴'],
+                  ['multi', '多屏'],
                 ] as const
               ).map(([v, label]) => (
                 <button
@@ -624,75 +961,31 @@ export default function LivePage() {
       </div>
 
       {view === 'timeline' && <TimelineView items={visible} epg={epg} now={now} onPlay={playChannel} />}
+      {view === 'multi' && <MultiView items={visible} />}
 
-      <div
-        className={`mt-4 grid grid-cols-[repeat(auto-fill,minmax(232px,1fr))] gap-3 px-10 ${
-          view === 'timeline' ? 'hidden' : ''
-        }`}
-      >
-        {visible.map((c) => {
-          const list = epg[c.id]
-          return (
-            <div
-              key={c.id}
-              className={`glass-panel group relative cursor-pointer overflow-hidden rounded-2xl p-3.5 transition hover:border-gold/30 ${
-                health[c.id]?.ok === false ? 'opacity-55' : ''
-              }`}
-              onClick={() => playChannel(c)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') playChannel(c)
-              }}
-            >
-              {health[c.id]?.ok === false && (
-                <span className="absolute right-2 top-2 rounded-md bg-red-500/15 px-1.5 py-0.5 text-[9.5px] text-red-300/90">
-                  失效
-                </span>
+      {view === 'grid' && (
+        <div className="mt-4 px-10">
+          {groupSections.map(([g, list]) => (
+            <section key={g} className="mb-6">
+              {group === '全部' && (
+                <button
+                  onClick={() => toggleCollapsed(g)}
+                  className="mb-2.5 flex items-center gap-2 text-[12.5px] text-muted hover:text-gold"
+                >
+                  <span className="text-[10px]">{prefs.collapsed.includes(g) ? '▸' : '▾'}</span>
+                  <span className="font-medium text-fg/85">{g}</span>
+                  <span className="text-[10.5px] text-muted/60">{list.length} 个</span>
+                </button>
               )}
-              <div className="flex items-center gap-3">
-                <ChannelLogo item={c} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-medium">{c.title}</div>
-                  <div className="truncate text-[10.5px] text-muted">{c.group || '未分组'}</div>
+              {!prefs.collapsed.includes(g) && (
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(232px,1fr))] gap-3">
+                  {list.map((c) => renderCard(c))}
                 </div>
-                <Play
-                  size={13}
-                  className="shrink-0 text-muted opacity-0 transition group-hover:opacity-100 group-hover:text-gold"
-                />
-              </div>
-
-              <NowStrip list={list} fallback="暂无节目单" />
-
-              <div className="mt-2.5 flex items-center justify-between">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void openGuide(c)
-                  }}
-                  className="flex items-center gap-1 text-[10.5px] text-muted/80 hover:text-gold"
-                >
-                  <Clock size={10.5} /> 节目单
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    actions.toggleChannelFavorite(c.id)
-                  }}
-                  title={channelFavorites.includes(c.id) ? '取消收藏' : '收藏频道'}
-                  className={`rounded-md p-1 transition ${
-                    channelFavorites.includes(c.id)
-                      ? 'text-gold'
-                      : 'text-muted/50 opacity-0 group-hover:opacity-100 hover:text-gold'
-                  }`}
-                >
-                  <Star size={12} fill={channelFavorites.includes(c.id) ? 'currentColor' : 'none'} />
-                </button>
-              </div>
-            </div>
-          )
-        })}
-      </div>
+              )}
+            </section>
+          ))}
+        </div>
+      )}
 
       {view === 'grid' && visible.length === 0 && (
         <div className="px-10 pt-10 text-center text-[12px] text-muted">
@@ -706,6 +999,8 @@ export default function LivePage() {
         <GuideDrawer
           picked={{ item: picked.item, source: pickedSource, list: pickedList }}
           loading={guideLoading}
+          now={now}
+          onCatchup={(p) => catchup(picked.item, p)}
           onClose={() => setPicked(null)}
           onPlay={() => {
             setPicked(null)

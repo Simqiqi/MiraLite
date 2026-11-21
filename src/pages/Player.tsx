@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Maximize,
+  MonitorPlay,
   Moon,
   Pause,
   PictureInPicture2,
@@ -21,7 +22,31 @@ import { actions, useLibrary } from '../lib/store'
 import { loadSubtitles, type SubtitleTrack } from '../lib/subtitles'
 import { isDead } from '../lib/health'
 import { normalizeBase } from '../lib/xtream'
+import { availablePlayers, openInPlayer, type PlayerOption } from '../lib/system'
+import { advance, useQueue, type QueueItem } from '../lib/playQueue'
+import { getMarkers, setIntroEnd, setOutroStart } from '../lib/skipMarkers'
+import { orderedChannels } from '../lib/channelPrefs'
+import { saveShortProgress } from '../lib/shortProgress'
+import { fileToPlayUrl, sdPrepare } from '../lib/short'
 import type { MediaItem } from '../lib/types'
+
+/** 队列项 → 播放页地址（短剧要现场解密，单独处理） */
+function routeFor(item: QueueItem): string | null {
+  if (item.kind === 'path') return item.path
+  if (item.kind === 'vod') {
+    const params = new URLSearchParams({
+      remote: '1',
+      mode: 'movie',
+      source: item.sourceId,
+      id: String(item.streamId),
+      ext: item.ext,
+      name: item.name,
+    })
+    if (item.poster) params.set('poster', item.poster)
+    return `/play/_?${params.toString()}`
+  }
+  return null
+}
 
 const PIP_SUPPORTED =
   typeof document !== 'undefined' &&
@@ -47,29 +72,74 @@ export default function PlayerPage() {
   // 片库点播：以 query 形式带 sourceId + streamId，播放页用源凭据现场拼地址
   const remoteItem = useMemo<MediaItem | undefined>(() => {
     if (params.get('remote') !== '1') return undefined
+    const mode = params.get('mode') ?? 'movie'
+    const name0 = params.get('name') || '点播'
+
+    // 直链模式：短剧等外部来源直接给播放地址
+    if (mode === 'url') {
+      const raw = params.get('u') ?? ''
+      if (!/^(https?|asset):\/\//.test(raw)) return undefined
+      return {
+        id: `remote-url-${raw.slice(-24)}`,
+        kind: 'movie',
+        title: name0,
+        genres: ['短剧'],
+        hue: (name0.charCodeAt(0) * 37 + (name0.charCodeAt(1) || 11) * 13) % 360,
+        poster: params.get('poster') || undefined,
+        streamUrl: raw,
+      }
+    }
+
     const source = sources.find((s) => s.id === params.get('source'))
     const streamId = Number(params.get('id') ?? 0)
     if (!source || !streamId) return undefined
-    const mode = params.get('mode') === 'series' ? 'series' : 'movie'
     const ext = params.get('ext') || 'mp4'
     const base = normalizeBase(source.url)
     const name = params.get('name') || '点播'
+    const user = encodeURIComponent(source.username ?? '')
+    const pass = encodeURIComponent(source.password ?? '')
+
+    let streamUrl: string
+    if (mode === 'timeshift') {
+      // 回看：/timeshift/{user}/{pass}/{时长(分)}/{YYYY-MM-DD:HH-mm}/{stream_id}.m3u8
+      const start = params.get('start') || ''
+      const dur = params.get('dur') || '60'
+      streamUrl = `${base}/timeshift/${user}/${pass}/${dur}/${start}/${streamId}.m3u8`
+    } else {
+      const kindPath = mode === 'series' ? 'series' : 'movie'
+      streamUrl = `${base}/${kindPath}/${user}/${pass}/${streamId}.${ext}`
+    }
+
     return {
-      id: `remote-${mode}-${streamId}`,
+      id: `remote-${source.id}-${mode}-${streamId}`,
       kind: 'movie',
       title: name,
-      genres: [mode === 'series' ? '剧集' : '点播'],
+      genres: [mode === 'series' ? '剧集' : mode === 'timeshift' ? '回看' : '点播'],
       hue: (name.charCodeAt(0) * 37 + (name.charCodeAt(1) || 11) * 13) % 360,
       poster: params.get('poster') || undefined,
-      streamUrl: `${base}/${mode}/${encodeURIComponent(source.username ?? '')}/${encodeURIComponent(
-        source.password ?? '',
-      )}/${streamId}.${ext}`,
+      streamUrl,
     }
   }, [params, sources])
 
   const item = (id && id !== '_' ? catalog.byId[id] : undefined) ?? remoteItem
   const isLive = item?.kind === 'channel'
-  const isRemote = item?.id.startsWith('remote-') ?? false
+  const shortSeries = params.get('series')
+  const shortEp = Number(params.get('ep') ?? 0)
+  /** 片头片尾标记的 key：短剧按剧集，其余按条目 */
+  const markerKey = shortSeries ? `short:${shortSeries}#${shortEp}` : (item?.id ?? '')
+  const [markers, setMarkers] = useState(() => (markerKey ? getMarkers(markerKey) : {}))
+  const introSkippedRef = useRef(false)
+
+  useEffect(() => {
+    setMarkers(markerKey ? getMarkers(markerKey) : {})
+    introSkippedRef.current = false
+  }, [markerKey])
+
+  const queue = useQueue()
+  const nextItem = queue.items[queue.index + 1] ?? null
+  const isTimeshift = item?.id.includes('-timeshift-') ?? false
+  /** 片库点播（电影/剧集）记进度；回看与直播不记 */
+  const trackProgress = !!item && !isLive && !isTimeshift
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -88,37 +158,65 @@ export default function PlayerPage() {
   const [sleepUntil, setSleepUntil] = useState<number | null>(null)
   const [sleepLeft, setSleepLeft] = useState(0)
   const [sleepMenu, setSleepMenu] = useState(false)
+  const [players, setPlayers] = useState<PlayerOption[]>([])
+  const [extMenu, setExtMenu] = useState(false)
+  const [zapBuffer, setZapBuffer] = useState('')
+  const zapRef = useRef('')
+  const zapTimerRef = useRef<number | undefined>(undefined)
 
-  /** 同源直播频道列表：用于 ↑↓ 快速换台（频道数量不大，直接算） */
-  const channelList =
-    isLive && item?.sourceId
-      ? catalog.channels.filter((c) => c.kind === 'channel' && c.sourceId === item.sourceId)
-      : []
+  /** 同源直播频道列表：按频道号排序，和直播页显示的编号一致 */
+  const channelSeqList = useMemo(
+    () =>
+      isLive && item?.sourceId
+        ? orderedChannels(catalog.channels.filter((c) => c.kind === 'channel' && c.sourceId === item.sourceId))
+        : [],
+    [catalog.channels, isLive, item?.sourceId],
+  )
+  const channelList = channelSeqList.map((x) => x.item)
   const channelPos = channelList.findIndex((c) => c.id === item?.id)
+
+  // HUD：3 秒无操作自动隐藏；鼠标移动或按键都会重新计时
+  const hudTimerRef = useRef<number | undefined>(undefined)
+  const showHud = useCallback(() => {
+    setHudVisible(true)
+    if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current)
+    hudTimerRef.current = window.setTimeout(() => setHudVisible(false), 3000)
+  }, [])
+
+  useEffect(() => {
+    showHud()
+    return () => {
+      if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current)
+    }
+  }, [showHud])
+
+  /** 同源频道序列（带频道号）：优先只含未失效的频道 */
+  const channelSeq = useCallback(() => {
+    const alive = channelSeqList.filter((x) => !isDead(x.item.id))
+    return alive.length > 1 ? alive : channelSeqList
+  }, [channelSeqList])
 
   const zap = useCallback(
     (step: number) => {
-      if (!item?.sourceId) return
-      const all = catalog.channels.filter(
-        (c) => c.kind === 'channel' && c.sourceId === item.sourceId,
-      )
-      // 已知失效的频道自动跳过；全挂了就退回完整列表
-      const alive = all.filter((c) => !isDead(c.id))
-      const list = alive.length > 1 ? alive : all
+      const list = channelSeq()
       if (list.length < 2) return
-      const pos = list.findIndex((c) => c.id === item.id)
-      if (pos < 0 && list !== all) {
-        const fallback = all.findIndex((c) => c.id === item.id)
-        if (fallback < 0) return
-        const next = all[(fallback + step + all.length) % all.length]
-        navigate(`/play/${next.id}`, { replace: true })
-        return
-      }
+      const pos = list.findIndex((x) => x.item.id === item?.id)
       if (pos < 0) return
       const next = list[(pos + step + list.length) % list.length]
-      navigate(`/play/${next.id}`, { replace: true })
+      navigate(`/play/${next.item.id}`, { replace: true })
     },
-    [catalog.channels, item, navigate],
+    [channelSeq, item?.id, navigate],
+  )
+
+  /** 数字键直达：输入的是「频道号」（可自定义），不是下标 */
+  const zapToIndex = useCallback(
+    (n: number) => {
+      const list = channelSeq()
+      const hit = list.find((x) => x.number === n)
+      if (!hit) return
+      navigate(`/play/${hit.item.id}`, { replace: true })
+    },
+    [channelSeq, navigate],
   )
 
   // 记一次最近观看
@@ -221,6 +319,30 @@ export default function PlayerPage() {
     }
   }, [item?.streamUrl, isLive])
 
+  // 片库续播：地址里带 pos=秒，元数据就绪后跳到该位置
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    const pos = Number(params.get('pos') ?? 0)
+    if (!pos || !Number.isFinite(pos)) return
+    const onLoaded = () => {
+      if (v.currentTime < 1) v.currentTime = pos
+    }
+    v.addEventListener('loadedmetadata', onLoaded)
+    return () => v.removeEventListener('loadedmetadata', onLoaded)
+  }, [params, item?.streamUrl])
+
+  // 外部播放器
+  useEffect(() => {
+    let cancelled = false
+    void availablePlayers().then((list) => {
+      if (!cancelled) setPlayers(list)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   // ---- 本地同名字幕 ----
   useEffect(() => {
     const path = item?.filePath
@@ -274,28 +396,120 @@ export default function PlayerPage() {
     }
   }, [subIndex, subTracks])
 
-  // 进度记忆（直播不记）
+  // 进度记忆：短剧单独存一份（用于「继续观看」），其余走片库进度
   useEffect(() => {
-    if (!item || isLive) return
+    if (!trackProgress) return
     const timer = window.setInterval(() => {
       const v = videoRef.current
-      if (!v || v.paused || !v.duration) return
-      actions.setProgress(item.id, {
-        position: v.currentTime,
-        duration: v.duration,
-        updatedAt: Date.now(),
-      })
+      if (!v || v.paused || !v.duration || !Number.isFinite(v.duration)) return
+      if (shortSeries && item) {
+        saveShortProgress(
+          {
+            seriesId: shortSeries,
+            title: params.get('title') || item.title,
+            cover: params.get('cover') || item.poster,
+            episodeId: params.get('epId') ?? '',
+            epNumber: shortEp,
+            seconds: v.currentTime,
+            duration: v.duration,
+          },
+          v.currentTime,
+          v.duration,
+        )
+        return
+      }
+      if (item) {
+        actions.setProgress(item.id, {
+          position: v.currentTime,
+          duration: v.duration,
+          updatedAt: Date.now(),
+        })
+      }
     }, 5000)
     return () => window.clearInterval(timer)
-  }, [item, isLive, isRemote])
+  }, [item, trackProgress, shortSeries, shortEp, params])
+
+  // 片头自动跳过
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v || isLive || !markers.introEnd) return
+    const onTime = () => {
+      if (introSkippedRef.current) return
+      if (v.currentTime > 1 && v.currentTime < (markers.introEnd ?? 0) - 1) {
+        v.currentTime = markers.introEnd as number
+        introSkippedRef.current = true
+        setStatus('已跳过片头')
+        window.setTimeout(() => setStatus(null), 1600)
+      }
+    }
+    v.addEventListener('timeupdate', onTime)
+    return () => v.removeEventListener('timeupdate', onTime)
+  }, [markers.introEnd, isLive, item?.streamUrl])
+
+  /** 队列下一集；短剧要先下载解密 */
+  const goNext = useCallback(async () => {
+    const next = advance()
+    if (!next) return
+    if (next.kind === 'short') {
+      setStatus(`正在准备 ${next.name}…`)
+      try {
+        const r = await sdPrepare(next.seriesId, next.episodeId)
+        const qp = new URLSearchParams({
+          remote: '1',
+          mode: 'url',
+          u: fileToPlayUrl(r.path),
+          name: next.name,
+          series: next.seriesId,
+          ep: String(next.epNumber),
+          epId: next.episodeId,
+          title: next.name,
+        })
+        if (next.cover) qp.set('cover', next.cover)
+        navigate(`/play/_?${qp.toString()}`, { replace: true })
+        setStatus(null)
+      } catch (e) {
+        setStatus(e instanceof Error ? `下一集准备失败：${e.message}` : '下一集准备失败')
+      }
+      return
+    }
+    const path = routeFor(next)
+    if (path) navigate(path, { replace: true })
+  }, [navigate])
+
+  const nextRef = useRef<() => void>(() => {})
+  nextRef.current = () => {
+    void goNext()
+  }
 
   // 键盘：直播 ↑↓ 换台，点播 ←→ 快进快退
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      showHud()
       const v = videoRef.current
       if (!v) return
       const target = e.target as HTMLElement | null
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
+
+      if (isLive && /^[0-9]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        zapRef.current = (zapRef.current + e.key).slice(-4)
+        setZapBuffer(zapRef.current)
+        if (zapTimerRef.current) window.clearTimeout(zapTimerRef.current)
+        zapTimerRef.current = window.setTimeout(() => {
+          zapRef.current = ''
+          setZapBuffer('')
+        }, 1500)
+        return
+      }
+      if (isLive && e.key === 'Enter' && zapRef.current) {
+        e.preventDefault()
+        const n = Number(zapRef.current)
+        zapRef.current = ''
+        setZapBuffer('')
+        if (zapTimerRef.current) window.clearTimeout(zapTimerRef.current)
+        if (Number.isFinite(n)) zapToIndex(n)
+        return
+      }
 
       if (isLive && (e.key === 'ArrowUp' || e.key === 'PageUp')) {
         e.preventDefault()
@@ -317,13 +531,28 @@ export default function PlayerPage() {
       } else if (e.key.toLowerCase() === 'm') {
         v.muted = !v.muted
         setMuted(v.muted)
+      } else if (!isLive && e.key === 'n' && nextItem) {
+        void goNext()
+      } else if (!isLive && (e.key === '[' || e.key === ']')) {
+        const v2 = videoRef.current
+        if (!v2 || !markerKey) return
+        if (e.key === '[') {
+          setIntroEnd(markerKey, v2.currentTime)
+          setMarkers(getMarkers(markerKey))
+          setStatus(`片头结束标记于 ${Math.round(v2.currentTime)}s`)
+        } else {
+          setOutroStart(markerKey, v2.currentTime)
+          setMarkers(getMarkers(markerKey))
+          setStatus(`片尾起点标记于 ${Math.round(v2.currentTime)}s`)
+        }
+        window.setTimeout(() => setStatus(null), 1800)
       } else if (e.key.toLowerCase() === 'c' && !isLive) {
         setSubIndex((idx) => (idx >= 0 ? -1 : subTracks.length > 0 ? 0 : -1))
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [navigate, isLive, zap, subMenu, subTracks.length])
+  }, [navigate, isLive, zap, zapToIndex, subMenu, subTracks.length, showHud, goNext, nextItem, markerKey])
 
   // 睡眠定时器
   useEffect(() => {
@@ -360,12 +589,6 @@ export default function PlayerPage() {
     }
   }, [])
 
-  useEffect(() => {
-    if (!hudVisible) return
-    const t = window.setTimeout(() => setHudVisible(false), 3200)
-    return () => window.clearTimeout(t)
-  }, [hudVisible])
-
   if (!item) {
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-muted">
@@ -399,7 +622,7 @@ export default function PlayerPage() {
   return (
     <div
       ref={wrapRef}
-      onMouseMove={() => setHudVisible(true)}
+      onMouseMove={showHud}
       className="relative flex h-full w-full items-center justify-center bg-black"
     >
       <video
@@ -410,6 +633,9 @@ export default function PlayerPage() {
         onPause={() => setPlaying(false)}
         onTimeUpdate={(e) => setCurrent(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onEnded={() => {
+          if (!isLive && nextItem) nextRef.current()
+        }}
         onError={() => {
           if (!isLive) setError('无法加载该视频流，检查源是否可直连')
         }}
@@ -438,38 +664,65 @@ export default function PlayerPage() {
       )}
 
       <div
-        className={`absolute inset-x-0 top-0 flex items-start justify-between bg-gradient-to-b from-black/85 to-transparent p-5 transition-opacity duration-300 ${
-          hudVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
+        className={`pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-300 ${
+          hudVisible ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
+
+      {/* 顶部玻璃条：左边留出 macOS 红绿灯的位置 */}
+      <div
+        className={`pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-3 px-4 pb-10 pl-[84px] pt-3 transition-opacity duration-300 ${
+          hudVisible ? 'opacity-100' : 'opacity-0'
         }`}
       >
-        <button
-          onClick={() => navigate(-1)}
-          className="glass-btn flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] text-white/85"
+        <div className={`flex items-center gap-2 ${hudVisible ? 'pointer-events-auto' : 'pointer-events-none'}`}>
+          <button
+            onClick={() => navigate(-1)}
+            className="glass-capsule flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] text-white/90 transition hover:text-gold"
+          >
+            <ArrowLeft size={14} /> 返回
+          </button>
+        </div>
+
+        <div
+          data-tauri-drag-region
+          className={`glass-capsule flex max-w-[52%] items-center gap-2.5 rounded-full px-4 py-2 ${
+            hudVisible ? 'pointer-events-auto' : 'pointer-events-none'
+          }`}
         >
-          <ArrowLeft size={14} /> 返回
-        </button>
-        <div className="text-right">
-          <div className="text-[13.5px] font-medium text-white/90">{item.title}</div>
-          <div className="mt-0.5 text-[11px] text-white/50">
+          <span className="truncate text-[12.5px] font-medium text-white/90">{item.title}</span>
+          <span className="h-3 w-px shrink-0 bg-white/15" aria-hidden="true" />
+          <span className="truncate text-[10.5px] text-white/45">
             {item.year ? `${item.year} · ` : ''}
             {item.genres.join(' / ')}
-            {isLive && channelPos >= 0 && channelList.length > 1
-              ? ` · ${channelPos + 1}/${channelList.length}`
-              : ''}
-          </div>
+          </span>
+          {isLive && channelPos >= 0 && channelList.length > 1 && (
+            <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] tabular-nums text-white/70">
+              {channelSeqList[channelPos]?.number ?? channelPos + 1}/{channelSeqList.length}
+            </span>
+          )}
         </div>
       </div>
 
       <div
-        className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-6 pb-5 pt-10 transition-opacity duration-300 ${
+        className={`absolute inset-x-0 bottom-0 px-4 pb-4 pt-16 transition-opacity duration-300 ${
           hudVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
       >
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/75 to-transparent"
+          aria-hidden="true"
+        />
+        <div
+          className="glass-panel relative rounded-2xl px-4 py-3"
+          style={{ backgroundImage: 'linear-gradient(145deg, rgba(20,20,28,0.62), rgba(8,8,14,0.5))' }}
+        >
         {isLive ? (
           <div className="mb-2 flex items-center gap-2 text-[11px] text-white/45">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
             直播中
-            {channelList.length > 1 && <span className="ml-1">· ↑ ↓ 换台</span>}
+            {channelList.length > 1 && <span className="ml-1">· ↑ ↓ 换台 · 数字键按频道号直达</span>}
+            {zapBuffer && <span className="ml-2 text-gold">跳到 {zapBuffer} 号</span>}
           </div>
         ) : (
           <div className="mb-2 flex items-center gap-2.5">
@@ -562,6 +815,43 @@ export default function PlayerPage() {
             >
               {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
             </button>
+
+            {!isLive && markerKey && (
+              <>
+                <button
+                  onClick={() => {
+                    const v = videoRef.current
+                    if (!v) return
+                    setIntroEnd(markerKey, v.currentTime)
+                    setMarkers(getMarkers(markerKey))
+                    setStatus(`片头结束标记于 ${Math.round(v.currentTime)}s`)
+                    window.setTimeout(() => setStatus(null), 1800)
+                  }}
+                  title="把当前时间记为片头结束（快捷键 [）"
+                  className={`text-[11px] transition ${
+                    markers.introEnd ? 'text-gold/80' : 'text-white/55 hover:text-white'
+                  }`}
+                >
+                  片头
+                </button>
+                <button
+                  onClick={() => {
+                    const v = videoRef.current
+                    if (!v) return
+                    setOutroStart(markerKey, v.currentTime)
+                    setMarkers(getMarkers(markerKey))
+                    setStatus(`片尾起点标记于 ${Math.round(v.currentTime)}s`)
+                    window.setTimeout(() => setStatus(null), 1800)
+                  }}
+                  title="把当前时间记为片尾起点（快捷键 ]）"
+                  className={`text-[11px] transition ${
+                    markers.outroStart ? 'text-gold/80' : 'text-white/55 hover:text-white'
+                  }`}
+                >
+                  片尾
+                </button>
+              </>
+            )}
 
             <div className="relative">
               <button
@@ -659,6 +949,55 @@ export default function PlayerPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            {!isLive && current >= (markers.outroStart ?? Infinity) - 1 && (
+              <button
+                onClick={() => {
+                  if (nextItem) nextRef.current()
+                  else {
+                    const v = videoRef.current
+                    if (v) v.pause()
+                  }
+                }}
+                className="glass-primary rounded-full px-3 py-1.5 text-[11.5px] font-semibold"
+              >
+                {nextItem ? `跳过片尾 · 下一集` : '跳过片尾'}
+              </button>
+            )}
+            {!isLive && nextItem && (
+              <span className="hidden text-[10.5px] text-white/45 sm:inline">
+                下一个：{nextItem.name}
+              </span>
+            )}
+            {players.length > 0 && item.streamUrl && (
+              <div className="relative">
+                <button
+                  onClick={() => setExtMenu((v) => !v)}
+                  title="用外部播放器打开"
+                  className={`transition ${extMenu ? 'text-gold' : 'text-white/70 hover:text-white'}`}
+                >
+                  <MonitorPlay size={16} />
+                </button>
+                {extMenu && (
+                  <div className="glass-panel absolute bottom-9 right-0 z-20 w-[132px] rounded-xl p-1.5">
+                    {players.map((pl) => (
+                      <button
+                        key={pl.id}
+                        onClick={() => {
+                          setExtMenu(false)
+                          void openInPlayer(item.streamUrl as string, pl.id).catch((e) => {
+                            setStatus(e instanceof Error ? e.message : String(e))
+                            window.setTimeout(() => setStatus(null), 2600)
+                          })
+                        }}
+                        className="w-full rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-white/80 hover:bg-white/8"
+                      >
+                        用 {pl.name} 播放
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {!isLive && PIP_SUPPORTED && (
               <button
                 onClick={() => void togglePip()}
@@ -680,6 +1019,7 @@ export default function PlayerPage() {
               <Maximize size={16} />
             </button>
           </div>
+        </div>
         </div>
       </div>
     </div>

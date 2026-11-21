@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Film, Loader2, Play, Search, Star, X } from 'lucide-react'
 import { useLibrary } from '../lib/store'
+import { setQueue } from '../lib/playQueue'
 import type { Source } from '../lib/types'
 import {
   xtreamCategories,
@@ -38,12 +39,15 @@ function PosterCard({
   img,
   meta,
   badge,
+  progress,
   onClick,
 }: {
   title: string
   img?: string
   meta: string
   badge?: string
+  /** 0~1，有值就画底部进度条 */
+  progress?: number
   onClick: () => void
 }) {
   const [broken, setBroken] = useState(false)
@@ -88,6 +92,14 @@ function PosterCard({
       <span className="glass-primary absolute bottom-2.5 right-2.5 flex h-7 w-7 items-center justify-center rounded-full opacity-0 transition group-hover:opacity-100">
         <Play size={11} fill="currentColor" />
       </span>
+      {typeof progress === 'number' && progress > 0.01 && (
+        <span className="absolute inset-x-2 bottom-1.5 h-[3px] overflow-hidden rounded-full bg-white/20">
+          <span
+            className="block h-full rounded-full bg-gold"
+            style={{ width: `${Math.min(progress, 0.99) * 100}%` }}
+          />
+        </span>
+      )}
     </button>
   )
 }
@@ -97,11 +109,13 @@ function SeriesDrawer({
   series,
   onClose,
   onPlay,
+  onBinge,
 }: {
   source: Source
   series: XtreamSeries
   onClose: () => void
   onPlay: (ep: XtreamEpisode) => void
+  onBinge: (episodes: XtreamEpisode[], index: number) => void
 }) {
   const [episodes, setEpisodes] = useState<XtreamEpisode[] | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -184,7 +198,15 @@ function SeriesDrawer({
           )}
           {seasons.map(([season, list]) => (
             <section key={season} className="mb-3">
-              <div className="px-2 py-1.5 text-[11px] text-muted/70">第 {season || 1} 季</div>
+              <div className="flex items-center justify-between px-2 py-1.5 text-[11px] text-muted/70">
+                <span>第 {season || 1} 季</span>
+                <button
+                  onClick={() => onBinge(list, 0)}
+                  className="glass-chip rounded-lg px-2 py-0.5 text-[10.5px] text-fg/80 hover:text-gold"
+                >
+                  整季连播
+                </button>
+              </div>
               {list.map((ep) => (
                 <button
                   key={ep.id}
@@ -215,7 +237,7 @@ function SeriesDrawer({
 
 export default function LibraryPage() {
   const navigate = useNavigate()
-  const { sources } = useLibrary()
+  const { sources, progress } = useLibrary()
   const xtreamSources = useMemo(
     () => sources.filter((s) => s.kind === 'xtream' && s.enabled),
     [sources],
@@ -320,19 +342,39 @@ export default function LibraryPage() {
     return [...count.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])
   }, [cats, vod, series, tab, catName])
 
-  function playVod(v: XtreamVodStream) {
+  /** 片库进度的稳定 ID：source + streamId */
+  function vodProgressId(streamId: number): string {
+    return `remote-${source?.id ?? ''}-movie-${streamId}`
+  }
+
+  function playVod(v: XtreamVodStream, resume = false) {
     if (!source) return
     const params = new URLSearchParams({
       remote: '1',
-      mode: 'vod',
+      mode: 'movie',
       source: source.id,
       id: String(v.streamId),
       ext: v.container || 'mp4',
       name: v.name,
     })
     if (v.icon) params.set('poster', v.icon)
+    if (resume) {
+      const p = progress[vodProgressId(v.streamId)]
+      if (p && p.position > 5) params.set('pos', String(Math.floor(p.position)))
+    }
     navigate(`/play/_?${params.toString()}`)
   }
+
+  /** 看过一半以内的点播，按最近观看排序 */
+  const continueWatching = useMemo(() => {
+    if (!source) return []
+    return vod
+      .map((v) => ({ v, p: progress[vodProgressId(v.streamId)] }))
+      .filter((x) => x.p && x.p.duration > 0 && x.p.position / x.p.duration < 0.95 && x.p.position > 5)
+      .sort((a, b) => b.p.updatedAt - a.p.updatedAt)
+      .slice(0, 10)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vod, progress, source?.id])
 
   function playEpisode(s: XtreamSeries, ep: XtreamEpisode) {
     if (!source) return
@@ -464,6 +506,53 @@ export default function LibraryPage() {
         </div>
       )}
 
+      {tab === 'vod' && continueWatching.length > 0 && (
+        <section className="mt-5 px-10">
+          <div className="mb-3 flex items-baseline gap-2.5 border-b border-white/6 pb-3">
+            <h2 className="text-[15px] font-semibold tracking-tight">继续观看</h2>
+            <span className="text-[11px] text-muted/60">{continueWatching.length} 部</span>
+          </div>
+          <div className="no-scrollbar flex gap-3.5 overflow-x-auto pb-2">
+            {continueWatching.map(({ v, p }) => {
+              const pct = p.duration > 0 ? p.position / p.duration : 0
+              return (
+                <button
+                  key={v.streamId}
+                  onClick={() => playVod(v, true)}
+                  className="glass-poster group relative aspect-video w-[248px] shrink-0 overflow-hidden rounded-xl text-left transition hover:-translate-y-1"
+                >
+                  {v.icon ? (
+                    <img
+                      src={v.icon}
+                      alt=""
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 bg-white/6" />
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
+                  <div className="glass-sheen" />
+                  <div className="absolute inset-x-0 bottom-0 p-3">
+                    <div className="truncate text-[12px] font-medium text-white/90">{v.name}</div>
+                    <div className="mt-1.5 h-[3px] overflow-hidden rounded-full bg-white/20">
+                      <div className="h-full rounded-full bg-gold" style={{ width: `${pct * 100}%` }} />
+                    </div>
+                    <div className="mt-1 text-[10px] text-white/55">
+                      已看 {Math.round(pct * 100)}%
+                    </div>
+                  </div>
+                  <span className="glass-primary absolute right-2.5 top-2.5 flex h-8 w-8 items-center justify-center rounded-full opacity-0 transition group-hover:opacity-100">
+                    <Play size={13} fill="currentColor" />
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
       <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-3 px-10">
         {tab === 'vod'
           ? visibleVod.map((v) => (
@@ -473,7 +562,13 @@ export default function LibraryPage() {
                 img={v.icon}
                 meta={[v.year, v.container?.toUpperCase()].filter(Boolean).join(' · ') || '点播'}
                 badge={v.rating ? v.rating.toFixed(1) : undefined}
-                onClick={() => playVod(v)}
+                progress={
+                  progress[vodProgressId(v.streamId)]
+                    ? progress[vodProgressId(v.streamId)].position /
+                      Math.max(progress[vodProgressId(v.streamId)].duration, 1)
+                    : undefined
+                }
+                onClick={() => playVod(v, true)}
               />
             ))
           : visibleSeries.map((s) => (
@@ -494,6 +589,24 @@ export default function LibraryPage() {
           series={picked}
           onClose={() => setPicked(null)}
           onPlay={(ep) => playEpisode(picked, ep)}
+          onBinge={(eps, index) => {
+            if (!source) return
+            const list = eps.slice(index)
+            setQueue(
+              list.map((ep) => ({
+                kind: 'vod' as const,
+                name: `${picked.name} · S${ep.season}E${ep.episode}`,
+                sourceId: source.id,
+                streamId: ep.id,
+                ext: ep.container || 'mp4',
+                poster: picked.cover || undefined,
+              })),
+              0,
+            )
+            setPicked(null)
+            const first = list[0]
+            if (first) playEpisode(picked, first)
+          }}
         />
       )}
     </div>

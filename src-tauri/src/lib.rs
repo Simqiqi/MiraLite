@@ -1,6 +1,10 @@
 mod cat;
+mod diag;
 mod local;
 mod probe;
+mod short;
+mod sync;
+mod update;
 mod stream_proxy;
 mod sys;
 mod tmdb;
@@ -11,6 +15,7 @@ pub fn run() {
   tauri::Builder::default()
     .manage(cat::CatState::default())
     .manage(xtream::XtreamState::default())
+    .manage(short::ShortState::default())
     .setup(|app| {
       app.handle().plugin(
         tauri_plugin_log::Builder::default()
@@ -41,6 +46,29 @@ pub fn run() {
       local::find_subtitles,
       local::read_subtitle_b64,
       probe::probe_url,
+      short::sd_start,
+      short::sd_new,
+      short::sd_search,
+      short::sd_series,
+      short::sd_episodes,
+      short::sd_prepare,
+      short::sd_queue,
+      short::sd_queue_add,
+      short::sd_queue_clear,
+      short::sd_runtime,
+      short::sd_install_runtime,
+      diag::diag_info,
+      diag::diag_log_tail,
+      diag::diag_export,
+      diag::short_cache_list,
+      diag::short_cache_clear,
+      update::update_check,
+      short::sd_status,
+      sync::webdav_get_config,
+      sync::webdav_set_config,
+      sync::webdav_upload,
+      sync::webdav_download,
+      sync::webdav_test,
       probe::export_backup,
       probe::pick_backup_file,
       probe::read_backup_file,
@@ -54,6 +82,9 @@ pub fn run() {
       xtream::http_get_text,
       sys::open_url,
       sys::has_app,
+      sys::available_players,
+      sys::open_in_player,
+      sys::notify,
     ])
     .run(tauri::generate_context!())
     .expect("error while building tauri application");

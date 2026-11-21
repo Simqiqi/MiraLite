@@ -1,0 +1,11 @@
+{
+  "name": "miralite-short-drama",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MiraLite 短剧 sidecar：用 openhongguo 取目录与番剧播放信息，并本地解密 CENC 分片",
+  "main": "server.mjs",
+  "dependencies": {
+    "openhongguo": "^0.2.0"
+  }
+}

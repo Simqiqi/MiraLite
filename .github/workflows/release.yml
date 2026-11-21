@@ -1,0 +1,44 @@
+name: Release
+
+# 打 tag（v0.2.0 这种）时自动构建 macOS 包并创建 draft Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: 前端依赖
+        run: npm ci
+
+      - name: 短剧 sidecar 依赖
+        run: npm --prefix sidecar/short-drama ci
+
+      - name: 构建并创建 draft Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: MiraLite ${{ github.ref_name }}
+          releaseBody: '自动构建产物：macOS .app / .dmg。因未做 Apple 公证，首次打开需右键 → 打开。'
+          releaseDraft: true
+          prerelease: false
+          args: --target aarch64-apple-darwin

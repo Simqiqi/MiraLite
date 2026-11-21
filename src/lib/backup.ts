@@ -78,6 +78,8 @@ function validate(raw: unknown): BackupPayload {
   return { app: 'MiraLite', version: 1, exportedAt: Number(p.exportedAt) || Date.now(), data }
 }
 
+export { validate as parseBackupText }
+
 /** 选择备份文件并解析；用户取消返回 null */
 export async function pickBackup(): Promise<BackupPayload | null> {
   if (!inTauri()) throw new Error('恢复备份需要在 App 内运行')

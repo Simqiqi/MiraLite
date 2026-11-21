@@ -1,13 +1,15 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Clapperboard, Home, Library, Search, Settings2, Tv, UserRound } from 'lucide-react'
+import { Clapperboard, Home, Library, Popcorn, Search, Settings2, Tv, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import CommandPalette from './CommandPalette'
+import { startReminderScheduler } from '../lib/reminders'
 
 const navItems = [
   { to: '/', label: '首页', icon: Home },
   { to: '/chase', label: '追剧', icon: Clapperboard },
   { to: '/live', label: '直播', icon: Tv },
   { to: '/library', label: '片库', icon: Library },
+  { to: '/short', label: '短剧', icon: Popcorn },
   { to: '/me', label: '我的', icon: UserRound },
 ]
 
@@ -35,17 +37,31 @@ export default function Shell() {
   const [barHidden, setBarHidden] = useState(false)
   const lastScroll = useRef(0)
 
-  // ⌘K / Ctrl+K 随时唤出全局搜索
+  // 节目提醒轮询（只启动一次）
   useEffect(() => {
+    startReminderScheduler()
+  }, [])
+
+  // ⌘K 唤出搜索；⌘1~⌘6 直接切页面
+  useEffect(() => {
+    const shortcuts = [...navItems.map((n) => n.to), '/settings']
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      if (!(e.metaKey || e.ctrlKey)) return
+      const key = e.key.toLowerCase()
+      if (key === 'k') {
         e.preventDefault()
         setPaletteOpen((v) => !v)
+        return
+      }
+      const idx = Number(key) - 1
+      if (Number.isInteger(idx) && idx >= 0 && idx < shortcuts.length) {
+        e.preventDefault()
+        navigate(shortcuts[idx])
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [navigate])
 
   // 换页时顶栏复位、滚动基准归零
   useEffect(() => {
