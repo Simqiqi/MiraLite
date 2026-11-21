@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "MiraLite",
-  "version": "0.2.0",
+  "version": "0.0.1",
   "identifier": "com.miralite.app",
   "build": {
     "frontendDist": "../dist",
@@ -36,10 +36,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "app",
-      "dmg"
-    ],
+    "targets": "all",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -50,6 +47,9 @@
     "macOS": {
       "minimumSystemVersion": "11.0",
       "infoPlist": "Info.plist"
+    },
+    "resources": {
+      "../sidecar/short-drama": "sidecar/short-drama"
     }
   }
 }

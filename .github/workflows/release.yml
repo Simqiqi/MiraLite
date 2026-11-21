@@ -1,16 +1,39 @@
 name: Release
 
-# 打 tag（v0.2.0 这种）时自动构建 macOS 包并创建 draft Release
+# 推送 v* tag 时，三平台并行构建并发布 Release（不打 draft，直接发布）
 on:
   push:
     tags:
       - 'v*'
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS (Apple Silicon)
+            platform: macos-latest
+            targets: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - label: macOS (Intel)
+            platform: macos-latest
+            targets: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - label: Linux (x64)
+            platform: ubuntu-22.04
+            targets: ''
+            args: ''
+          - label: Windows (x64)
+            platform: windows-latest
+            targets: ''
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -23,7 +46,18 @@ jobs:
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.targets }}
+
+      - name: Linux 系统依赖
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2
 
       - name: 前端依赖
         run: npm ci
@@ -31,14 +65,21 @@ jobs:
       - name: 短剧 sidecar 依赖
         run: npm --prefix sidecar/short-drama ci
 
-      - name: 构建并创建 draft Release
+      - name: 构建并发布
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: MiraLite ${{ github.ref_name }}
-          releaseBody: '自动构建产物：macOS .app / .dmg。因未做 Apple 公证，首次打开需右键 → 打开。'
-          releaseDraft: true
+          releaseName: 'MiraLite ${{ github.ref_name }}'
+          releaseBody: |
+            自动构建产物（macOS / Linux / Windows）。
+
+            - macOS：`.dmg` / `.app`（未做 Apple 公证，首次打开请右键 → 打开）
+            - Windows：`.msi` / `.exe`
+            - Linux：`.AppImage` / `.deb`
+
+            短剧功能需要 Node 运行时：应用内「设置 → 关于与更新 → 下载运行时」即可，无需自行安装。
+          releaseDraft: false
           prerelease: false
-          args: --target aarch64-apple-darwin
+          args: ${{ matrix.args }}

@@ -44,12 +44,17 @@ fn runtime_dir(app: &AppHandle) -> PathBuf {
 
 fn bundled_node(app: &AppHandle) -> Option<String> {
   let tag = platform_tag().ok()?;
-  let bin = if cfg!(windows) { "node.exe" } else { "node" };
-  let p = runtime_dir(app)
-    .join(format!("node-{NODE_VERSION}-{tag}"))
-    .join("bin")
-    .join(bin);
-  p.exists().then(|| p.to_string_lossy().to_string())
+  let root = runtime_dir(app).join(format!("node-{NODE_VERSION}-{tag}"));
+  // Windows 的压缩包把 node.exe 放在根目录，macOS / Linux 在 bin/ 下
+  let candidates = if cfg!(windows) {
+    vec![root.join("node.exe")]
+  } else {
+    vec![root.join("bin").join("node")]
+  };
+  candidates
+    .into_iter()
+    .find(|p| p.exists())
+    .map(|p| p.to_string_lossy().to_string())
 }
 
 /// 系统 node 优先，其次内置运行时
