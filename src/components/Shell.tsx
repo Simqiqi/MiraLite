@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Clapperboard, Home, Library, Popcorn, Search, Settings2, Tv, UserRound } from 'lucide-react'
+import { Clapperboard, Globe, Home, Library, Popcorn, Search, Settings2, Tv, UserRound } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import CommandPalette from './CommandPalette'
 import { startReminderScheduler } from '../lib/reminders'
@@ -10,6 +10,7 @@ const navItems = [
   { to: '/live', label: '直播', icon: Tv },
   { to: '/library', label: '片库', icon: Library },
   { to: '/short', label: '短剧', icon: Popcorn },
+  { to: '/site', label: '看看', icon: Globe },
   { to: '/me', label: '我的', icon: UserRound },
 ]
 

@@ -1,5 +1,6 @@
 mod cat;
 mod diag;
+mod embed;
 mod local;
 mod probe;
 mod short;
@@ -63,6 +64,12 @@ pub fn run() {
       diag::short_cache_list,
       diag::short_cache_clear,
       update::update_check,
+      embed::site_open,
+      embed::site_bounds,
+      embed::site_navigate,
+      embed::site_reload,
+      embed::site_close,
+      embed::site_status,
       short::sd_status,
       sync::webdav_get_config,
       sync::webdav_set_config,
